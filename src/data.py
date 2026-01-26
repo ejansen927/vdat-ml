@@ -9,7 +9,6 @@ Data files are .pt (torch.save) containing:
     - "X": ML input [Xi, Jij], shape (N, n_qubits + n_edges)
     - "y": ML target [ZZij], shape (N, n_edges)
     - "A": Algorithm input [hi, Jij, theta] (optional, for reference)
-    - "Xi": Raw Xi output (optional, for reference)
 """
 
 import itertools

@@ -87,6 +87,7 @@ def sample_random(
     n_qubits: int,
     n_edges: int,
     rng: np.random.Generator,
+    **kwargs,
 ) -> Tuple[np.ndarray, np.ndarray, float]:
     """
     Sample from uniform random distribution.
@@ -105,6 +106,7 @@ def sample_gaussian(
     n_qubits: int,
     n_edges: int,
     rng: np.random.Generator,
+    **kwargs,
 ) -> Tuple[np.ndarray, np.ndarray, float]:
     """TODO: Implement truncated Gaussian sampling."""
     raise NotImplementedError(
@@ -116,6 +118,7 @@ def sample_gaussian(
 DISTRIBUTIONS = {
     "random": sample_random,
     "gaussian": sample_gaussian,
+    "sobol": None,  # Handled directly in generate_data
 }
 
 
@@ -138,33 +141,29 @@ def generate_data(
     Args:
         n_samples: Total number of samples to generate
         n_qubits: Number of qubits
-        distribution: Distribution name
+        distribution: Distribution name ('random', 'sobol', etc.)
         julia_main: Initialized Julia Main module
         seed: Random seed
         verbose: Print progress
-        chunk_size: If set, generate in chunks and GC between them
+        chunk_size: If set, process Julia calls in chunks with GC between them
     
     Returns dict with:
         X:  ML input [Xi, Jij], shape (N, n_qubits + n_edges)
         y:  ML target [ZZij], shape (N, n_edges)
         A:  Algorithm input [hi, Jij, theta], shape (N, n_qubits + n_edges + 1)
-        Xi: Raw Xi, shape (N, n_qubits)
     """
     import gc
     import time
+    import tempfile
     
     rng = np.random.default_rng(seed)
     # Julia uses 1-indexed edges
     edges_julia = list(itertools.combinations(range(1, n_qubits + 1), 2))
     n_edges = len(edges_julia)
     
-    sampler = DISTRIBUTIONS.get(distribution)
-    if sampler is None:
-        raise ValueError(f"Unknown distribution: {distribution}")
-    
-    # Determine chunk size
+    # Determine chunk size for Julia processing
     if chunk_size is None:
-        chunk_size = n_samples  # No chunking
+        chunk_size = min(25000, n_samples)  # Default 25K chunks
     
     # Determine print frequency based on dataset size
     if n_samples <= 100:
@@ -178,73 +177,175 @@ def generate_data(
     else:
         print_freq = 5000
     
-    A_list, Xi_list, ZZij_list = [], [], []
+    # Create temp directory for intermediate results
+    temp_dir = Path(tempfile.mkdtemp(prefix="vdat_gen_"))
+    if verbose:
+        print(f"  Temp directory: {temp_dir}")
     
-    samples_generated = 0
+    # =========================================================================
+    # Stage 1: Pre-generate all input samples and save to disk
+    # =========================================================================
+    if verbose:
+        print(f"\n  [Stage 1] Pre-generating {n_samples:,} input samples ({distribution})...")
+    
+    if distribution == "sobol":
+        from scipy.stats import qmc
+        
+        dim = n_qubits + n_edges + 1  # h_i + J_ij + theta
+        sampler = qmc.Sobol(d=dim, scramble=True, seed=seed)
+        raw = sampler.random(n_samples)  # float64 by default
+        
+        # Scale and save to disk immediately
+        all_h_i = raw[:, :n_qubits]  # [0, 1]
+        all_J_ij = raw[:, n_qubits:n_qubits + n_edges] * 2 - 1  # [-1, 1]
+        all_theta = raw[:, -1] * (np.pi / 2)  # [0, π/2]
+        
+        np.save(temp_dir / "h_i.npy", all_h_i)
+        np.save(temp_dir / "J_ij.npy", all_J_ij)
+        np.save(temp_dir / "theta.npy", all_theta)
+        
+        del raw, all_h_i, all_J_ij, all_theta
+        gc.collect()
+        
+        if verbose:
+            print(f"    Sobol samples saved to disk")
+    
+    elif distribution == "random":
+        all_h_i = rng.uniform(0.0, 1.0, size=(n_samples, n_qubits))
+        all_J_ij = rng.uniform(-1.0, 1.0, size=(n_samples, n_edges))
+        all_theta = rng.uniform(0.0, np.pi / 2, size=n_samples)
+        
+        np.save(temp_dir / "h_i.npy", all_h_i)
+        np.save(temp_dir / "J_ij.npy", all_J_ij)
+        np.save(temp_dir / "theta.npy", all_theta)
+        
+        del all_h_i, all_J_ij, all_theta
+        gc.collect()
+        
+        if verbose:
+            print(f"    Random samples saved to disk")
+    
+    else:
+        raise ValueError(f"Unknown distribution: {distribution}. Choose from ['random', 'sobol']")
+    
+    # =========================================================================
+    # Stage 2: Process through Julia in chunks, saving each chunk to disk
+    # =========================================================================
+    if verbose:
+        print(f"\n  [Stage 2] Processing through Julia (chunk_size={chunk_size:,})...")
+    
+    # Load inputs via memory mapping (read-only, doesn't load into RAM)
+    all_h_i = np.load(temp_dir / "h_i.npy", mmap_mode='r')
+    all_J_ij = np.load(temp_dir / "J_ij.npy", mmap_mode='r')
+    all_theta = np.load(temp_dir / "theta.npy", mmap_mode='r')
+    
+    samples_processed = 0
     chunk_num = 0
     total_start_time = time.time()
+    chunk_files = []
     
-    while samples_generated < n_samples:
+    while samples_processed < n_samples:
         chunk_num += 1
-        chunk_start = samples_generated
-        chunk_end = min(samples_generated + chunk_size, n_samples)
-        chunk_samples = chunk_end - chunk_start
+        chunk_start = samples_processed
+        chunk_end = min(samples_processed + chunk_size, n_samples)
+        chunk_n = chunk_end - chunk_start
         
-        if verbose and chunk_size < n_samples:
-            print(f"\n  [Chunk {chunk_num}] Generating samples {chunk_start + 1:,} to {chunk_end:,}")
+        if verbose:
+            print(f"\n    [Chunk {chunk_num}] Samples {chunk_start + 1:,} to {chunk_end:,}")
         
         chunk_start_time = time.time()
         
-        for i in range(chunk_samples):
-            global_idx = samples_generated + i
-            
-            if verbose and (global_idx + 1) % print_freq == 0:
+        # Process this chunk
+        Xi_chunk = []
+        ZZij_chunk = []
+        
+        for i in range(chunk_start, chunk_end):
+            if verbose and (i + 1) % print_freq == 0:
                 elapsed = time.time() - total_start_time
-                rate = (global_idx + 1) / elapsed
-                eta = (n_samples - global_idx - 1) / rate if rate > 0 else 0
-                pct = 100 * (global_idx + 1) / n_samples
-                print(f"    {global_idx + 1:>8,} / {n_samples:,} ({pct:5.1f}%) | "
-                      f"Rate: {rate:.1f} samples/sec | ETA: {eta/60:.1f} min")
+                rate = (i + 1) / elapsed
+                eta = (n_samples - i - 1) / rate if rate > 0 else 0
+                pct = 100 * (i + 1) / n_samples
+                print(f"      {i + 1:>8,} / {n_samples:,} ({pct:5.1f}%) | "
+                      f"Rate: {rate:.1f}/sec | ETA: {eta/60:.1f} min")
             
-            h_i, J_ij, theta = sampler(n_qubits, n_edges, rng)
+            # Extract sample - copy from mmap and ensure float64
+            h_i = np.array(all_h_i[i], dtype=np.float64)
+            J_ij = np.array(all_J_ij[i], dtype=np.float64)
+            theta = float(all_theta[i])
             
-            A_i = np.concatenate([h_i, J_ij, [theta]])
-            A_list.append(A_i)
-            
-            Jij_dict = {edge: J_ij[k] for k, edge in enumerate(edges_julia)}
+            # Call Julia oracle
+            Jij_dict = {edge: float(J_ij[k]) for k, edge in enumerate(edges_julia)}
             Xi, ZZij = call_oracle(julia_main, Jij_dict, h_i, theta, n_qubits, edges_julia)
             
-            Xi_list.append(Xi)
-            ZZij_list.append(ZZij)
+            Xi_chunk.append(Xi)
+            ZZij_chunk.append(ZZij)
         
-        samples_generated = chunk_end
+        # Save chunk to disk
+        chunk_file = temp_dir / f"chunk_{chunk_num:04d}.npz"
+        np.savez(chunk_file, 
+                 Xi=np.vstack(Xi_chunk), 
+                 ZZij=np.vstack(ZZij_chunk))
+        chunk_files.append(chunk_file)
         
-        # Chunk summary
-        if verbose and chunk_size < n_samples:
+        # Clear chunk from memory
+        del Xi_chunk, ZZij_chunk
+        
+        samples_processed = chunk_end
+        
+        # Chunk summary and aggressive GC
+        if verbose:
             chunk_elapsed = time.time() - chunk_start_time
-            print(f"    Chunk {chunk_num} complete: {chunk_samples:,} samples in {chunk_elapsed:.1f}s")
+            chunk_rate = chunk_n / chunk_elapsed if chunk_elapsed > 0 else 0
+            print(f"      Chunk saved: {chunk_file.name} | {chunk_rate:.1f}/sec")
+            print(f"      Running GC...")
         
-        # Force garbage collection between chunks
-        if chunk_size < n_samples and samples_generated < n_samples:
-            if verbose:
-                print(f"    Running garbage collection...")
-            gc.collect()
+        gc.collect()
     
-    # Final summary
+    # =========================================================================
+    # Stage 3: Load all chunks and combine
+    # =========================================================================
     if verbose:
         total_elapsed = time.time() - total_start_time
-        print(f"\n  Generation complete: {n_samples:,} samples in {total_elapsed:.1f}s ({n_samples/total_elapsed:.1f} samples/sec)")
+        print(f"\n  Julia complete: {n_samples:,} samples in {total_elapsed:.1f}s ({n_samples/total_elapsed:.1f}/sec)")
+        print(f"\n  [Stage 3] Combining {len(chunk_files)} chunks...")
     
-    # Stack arrays
-    A = np.vstack(A_list)
-    Xi = np.vstack(Xi_list)
-    ZZij = np.vstack(ZZij_list)
+    # Reload input arrays (need them for final output)
+    all_h_i = np.load(temp_dir / "h_i.npy")
+    all_J_ij = np.load(temp_dir / "J_ij.npy")
+    all_theta = np.load(temp_dir / "theta.npy")
     
-    # ML input: [Xi, Jij]
-    Jij = A[:, n_qubits:n_qubits + n_edges]
-    X = np.hstack([Xi, Jij])
+    # Load and combine output chunks
+    Xi_parts = []
+    ZZij_parts = []
     
-    return {"X": X, "y": ZZij, "A": A, "Xi": Xi}
+    for chunk_file in chunk_files:
+        data = np.load(chunk_file)
+        Xi_parts.append(data['Xi'])
+        ZZij_parts.append(data['ZZij'])
+    
+    Xi = np.vstack(Xi_parts)
+    ZZij = np.vstack(ZZij_parts)
+    
+    del Xi_parts, ZZij_parts
+    gc.collect()
+    
+    # Build final arrays
+    A = np.hstack([all_h_i, all_J_ij, all_theta.reshape(-1, 1)])
+    X = np.hstack([Xi, all_J_ij])
+    
+    # =========================================================================
+    # Cleanup temp files
+    # =========================================================================
+    if verbose:
+        print(f"  Cleaning up temp files...")
+    
+    import shutil
+    try:
+        shutil.rmtree(temp_dir)
+    except Exception as e:
+        print(f"    Warning: Could not delete temp dir: {e}")
+    
+    return {"X": X, "y": ZZij, "A": A}
 
 
 # =============================================================================
@@ -305,7 +406,8 @@ def save_metadata(output_dir: Path, args, shapes: Dict[str, tuple], config_name:
         "columns": {
             "X": f"[Xi ({args.n_qubits}), Jij ({n_edges})] -> input_dim={args.n_qubits + n_edges}",
             "y": f"[ZZij ({n_edges})] -> output_dim={n_edges}",
-            "A": f"[hi ({args.n_qubits}), Jij ({n_edges}), θ (1)] -> algo_input",
+            "A": f"[hi ({args.n_qubits}), Jij ({n_edges}), theta (1)] -> algo_input",
+            "Xi": f"[Xi ({args.n_qubits})] -> raw oracle output",
         },
     }
     
@@ -447,8 +549,8 @@ def parse_args():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     
-    parser.add_argument("--dist", required=True, choices=list(DISTRIBUTIONS.keys()),
-                        help="Distribution type")
+    parser.add_argument("--dist", required=True, choices=["random", "sobol", "gaussian"],
+                        help="Distribution type (random, sobol, gaussian)")
     parser.add_argument("--n_samples", type=int, required=True,
                         help="Number of samples")
     parser.add_argument("--n_qubits", type=int, required=True,
@@ -473,7 +575,7 @@ def parse_args():
     
     # Safety flags
     parser.add_argument("--overwrite", action="store_true",
-                        help="Allow overwriting existing data (CAUTION)")
+                        help="Allow overwriting existing data (DANGEROUS)")
     parser.add_argument("--append_timestamp", action="store_true",
                         help="Append timestamp to output directory name")
     
@@ -636,6 +738,13 @@ def main():
     print("Done!")
     print("=" * 60)
     print()
+    print("Train with:")
+    print(f"  python src/train.py data={config_name} model=mlp")
+    print(f"  python src/train.py data={config_name}_graph model=gnn")
+    print()
+    print("Quick test:")
+    print(f"  python src/train.py experiment=debug data={config_name}")
+
 
 if __name__ == "__main__":
     main()
