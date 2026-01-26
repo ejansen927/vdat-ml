@@ -1,0 +1,26 @@
+# @package _global_
+
+# =============================================================================
+# Debug Preset
+# =============================================================================
+#
+# Usage: python src/train.py experiment=debug
+#
+# Fast iteration for testing code changes. No W&B, few epochs.
+#
+# =============================================================================
+
+training:
+  epochs: 5
+  batch_size: 16
+
+logging:
+  wandb:
+    enabled: false
+  console:
+    log_freq: 1
+
+checkpoint:
+  save_best: false
+  save_last: false
+  save_freq: null

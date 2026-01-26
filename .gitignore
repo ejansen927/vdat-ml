@@ -1,0 +1,45 @@
+# =============================================================================
+# .gitignore
+# =============================================================================
+
+# Data (large files)
+data/
+
+# Hydra outputs
+outputs/
+
+# Checkpoints
+checkpoints/
+*.pt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# W&B
+wandb/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

@@ -1,0 +1,8 @@
+# Reduce LR On Plateau Scheduler
+# Note: requires scheduler.step(val_loss) instead of scheduler.step()
+
+_target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+mode: "min"
+factor: 0.5
+patience: 20
+min_lr: 1.0e-7

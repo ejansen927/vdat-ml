@@ -1,0 +1,25 @@
+# =============================================================================
+# MLP Configuration
+# =============================================================================
+#
+# Architecture defined by hidden_dims list:
+#   [128, 256, 128]         -> 3 hidden layers
+#   [64, 128, 256, 128, 64] -> 5 hidden layers (symmetric)
+#
+# Dimensions (input_dim, output_dim) auto-detected from data.
+#
+# =============================================================================
+
+name: "mlp"
+
+# Architecture: list of hidden layer widths
+hidden_dims: [128, 256, 128]
+
+# Activation: relu, gelu, silu
+activation: "silu"
+
+# Normalization: layer_norm, batch_norm, none
+norm: "layer_norm"
+
+# Dropout probability (0.0 to disable)
+dropout: 0.0

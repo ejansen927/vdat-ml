@@ -1,0 +1,77 @@
+# =============================================================================
+# Main Configuration
+# =============================================================================
+#
+# Usage:
+#   python src/train.py                              # defaults
+#   python src/train.py model=gnn data=random_4q_graph
+#   python src/train.py experiment=debug             # use preset
+#   python src/train.py -m model=mlp,gnn             # sweep
+#
+# =============================================================================
+
+defaults:
+  - model: mlp
+  - optimizer: adam
+  - scheduler: cosine
+  - data: random_4q
+  - _self_
+  - optional experiment: null
+
+# -----------------------------------------------------------------------------
+# Project / W&B Settings
+# -----------------------------------------------------------------------------
+project:
+  name: "quantum-ml"
+  experiment: "default"
+  tags: []
+
+# -----------------------------------------------------------------------------
+# Training Settings
+# -----------------------------------------------------------------------------
+training:
+  epochs: 500
+  batch_size: 32
+  seed: 42
+  device: "cuda"
+  
+  # Loss function: mse, mae, huber
+  loss: "mse"
+  
+  # Early stopping
+  early_stopping:
+    enabled: true
+    patience: 50
+    min_delta: 1.0e-6
+
+# -----------------------------------------------------------------------------
+# Logging Settings
+# -----------------------------------------------------------------------------
+logging:
+  wandb:
+    enabled: true
+    project: "${project.name}"
+    entity: null
+    log_freq: 10
+  
+  console:
+    log_freq: 10
+
+# -----------------------------------------------------------------------------
+# Checkpointing
+# -----------------------------------------------------------------------------
+checkpoint:
+  save_best: true
+  save_last: true
+  save_freq: 50
+  dir: "checkpoints/"
+
+# -----------------------------------------------------------------------------
+# Hydra Settings
+# -----------------------------------------------------------------------------
+hydra:
+  run:
+    dir: outputs/${project.experiment}/${now:%Y-%m-%d_%H-%M-%S}
+  sweep:
+    dir: outputs/${project.experiment}/multirun/${now:%Y-%m-%d_%H-%M-%S}
+    subdir: ${hydra.job.num}

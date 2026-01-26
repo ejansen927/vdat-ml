@@ -1,0 +1,74 @@
+# =============================================================================
+# Conda Environment: vdat-ml (GPU)
+# =============================================================================
+#
+# Install:
+#   conda env create -f env-gpu.yaml
+#   conda activate vdat-ml
+#
+#   # Then install PyG packages from their wheel index:
+#   pip install torch-scatter torch-sparse -f https://data.pyg.org/whl/torch-2.5.1+cu118.html
+#   pip install torch-geometric
+#
+# =============================================================================
+
+name: vdat-ml
+
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Python
+  - python=3.10
+  
+  # PyTorch (CUDA 11.8 - matches your working setup)
+  - pytorch=2.5.1=py3.10_cuda11.8_cudnn9.1.0_0
+  - pytorch-cuda=11.8
+  - torchaudio=2.5.1=py310_cu118
+  - torchvision=0.20.1=py310_cu118
+  
+  # CUDA libraries
+  - cuda-cudart=11.8.89
+  - cuda-libraries=11.8.0
+  - cuda-nvrtc=11.8.89
+  - cuda-runtime=11.8.0
+  
+  # Scientific computing
+  - numpy=1.26.4
+  - scipy=1.15.2
+  - pandas
+  - scikit-learn
+  
+  # Configuration & logging
+  - pyyaml
+  - tqdm
+  
+  # Utilities
+  - colorlog
+  - joblib
+  
+  - pip
+  
+  # pip packages
+  - pip:
+    # Hydra configuration
+    - hydra-core>=1.3.0
+    - omegaconf>=2.3.0
+    
+    # Weights & Biases
+    - wandb>=0.15.0
+    
+    # Julia interface
+    - julia>=0.6.0
+
+# =============================================================================
+# POST-INSTALL: Run these commands after conda env create:
+#
+#   conda activate vdat-ml
+#   pip install torch-scatter torch-sparse -f https://data.pyg.org/whl/torch-2.5.1+cu118.html
+#   pip install torch-geometric
+#
+# =============================================================================

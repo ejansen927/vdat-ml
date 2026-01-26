@@ -1,0 +1,26 @@
+# @package _global_
+
+# =============================================================================
+# Quick Preset
+# =============================================================================
+#
+# Usage: python src/train.py experiment=quick
+#
+# Short run to verify training works, with W&B logging.
+#
+# =============================================================================
+
+training:
+  epochs: 50
+
+logging:
+  wandb:
+    enabled: true
+    log_freq: 5
+  console:
+    log_freq: 5
+
+checkpoint:
+  save_best: true
+  save_last: false
+  save_freq: null

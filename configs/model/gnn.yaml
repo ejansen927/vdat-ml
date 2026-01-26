@@ -1,0 +1,29 @@
+# =============================================================================
+# GNN Configuration
+# =============================================================================
+#
+# Custom InteractiveNet architecture with:
+#   - Message passing on dense adjacency
+#   - Residual connections
+#   - Edge-level output decoder
+#
+# Dimensions (node_dim, edge_dim) auto-detected from data.
+#
+# =============================================================================
+
+name: "gnn"
+
+# Hidden dimension for all layers
+hidden_dim: 128
+
+# Number of InteractiveNet message passing layers
+num_layers: 3
+
+# Activation: relu, gelu, silu
+activation: "silu"
+
+# Normalization: layer_norm, batch_norm, none
+norm: "layer_norm"
+
+# Dropout probability (0.0 to disable)
+dropout: 0.0

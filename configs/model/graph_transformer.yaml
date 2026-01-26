@@ -1,0 +1,41 @@
+# ============================================================================
+# Graph Transformer Configuration
+# ============================================================================
+#
+# TODO: Implement in src/models.py
+#
+# Placeholder config - update when implementing.
+#
+# ============================================================================
+
+model:
+  _target_: src.models.GraphTransformer
+  name: "graph_transformer"
+  
+  # Dimensions (null = infer from data at runtime)
+  node_input_dim: null
+  edge_input_dim: null
+  output_dim: null
+  
+  # Transformer architecture
+  hidden_dim: 128
+  num_layers: 4
+  num_heads: 8
+  ff_ratio: 4                  # ff_dim = hidden_dim * ff_ratio
+  
+  # Positional encoding: none, laplacian, random_walk
+  pos_encoding: "none"
+  pos_dim: 16
+  
+  # Global pooling
+  global_pool: "mean"
+  
+  # Activation: relu, gelu, silu
+  activation: "gelu"
+  
+  # Regularization
+  dropout: 0.1
+  attention_dropout: 0.1
+  
+  # Layer norm: pre, post
+  norm_position: "pre"

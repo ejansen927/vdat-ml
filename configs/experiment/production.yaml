@@ -1,0 +1,26 @@
+# @package _global_
+
+# =============================================================================
+# Production Preset
+# =============================================================================
+#
+# Usage: python src/train.py experiment=production
+#
+# Full training with all logging and checkpointing.
+#
+# =============================================================================
+
+training:
+  epochs: 500
+
+logging:
+  wandb:
+    enabled: true
+    log_freq: 10
+  console:
+    log_freq: 10
+
+checkpoint:
+  save_best: true
+  save_last: true
+  save_freq: 100
