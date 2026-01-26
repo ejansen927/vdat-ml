@@ -305,8 +305,7 @@ def save_metadata(output_dir: Path, args, shapes: Dict[str, tuple], config_name:
         "columns": {
             "X": f"[Xi ({args.n_qubits}), Jij ({n_edges})] -> input_dim={args.n_qubits + n_edges}",
             "y": f"[ZZij ({n_edges})] -> output_dim={n_edges}",
-            "A": f"[hi ({args.n_qubits}), Jij ({n_edges}), theta (1)] -> algo_input",
-            "Xi": f"[Xi ({args.n_qubits})] -> raw oracle output",
+            "A": f"[hi ({args.n_qubits}), Jij ({n_edges}), θ (1)] -> algo_input",
         },
     }
     
