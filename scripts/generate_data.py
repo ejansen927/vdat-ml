@@ -119,7 +119,152 @@ DISTRIBUTIONS = {
     "random": sample_random,
     "gaussian": sample_gaussian,
     "sobol": None,  # Handled directly in generate_data
+    "hybrid": None,  # Handled directly in generate_data
 }
+
+
+def generate_stratified_samples(
+    n_samples: int,
+    n_qubits: int,
+    n_edges: int,
+    boundary_width: float = 0.1,
+    seed: int = 42,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Generate stratified samples with equal representation per boundary stratum.
+    
+    Strata are defined by "how many dimensions are at the boundary".
+    For 6 dimensions (edges), we have 7 strata (0 to 6 dims at boundary).
+    
+    This ensures corners (all dims at boundary) get as many samples as
+    the interior (no dims at boundary), despite having ~10^6x smaller volume.
+    
+    Args:
+        n_samples: Total samples to generate
+        n_qubits: Number of qubits (for h_i)
+        n_edges: Number of edges (for J_ij, defines strata)
+        boundary_width: Width of boundary region [0, bw] and [1-bw, 1]
+        seed: Random seed
+    
+    Returns:
+        h_i: (n_samples, n_qubits) in [0, 1]
+        J_ij: (n_samples, n_edges) in [-1, 1]  
+        theta: (n_samples,) in [0, π/2]
+    """
+    rng = np.random.default_rng(seed)
+    
+    n_strata = n_edges + 1  # 0 to n_edges dims at boundary
+    samples_per_stratum = n_samples // n_strata
+    remainder = n_samples % n_strata
+    
+    all_h_i = []
+    all_J_ij = []
+    all_theta = []
+    
+    for k in range(n_strata):
+        # k dimensions will be at boundary
+        n_this_stratum = samples_per_stratum + (1 if k < remainder else 0)
+        
+        for _ in range(n_this_stratum):
+            # Sample h_i uniformly (not stratified, just J_ij)
+            h_i = rng.uniform(0.0, 1.0, size=n_qubits)
+            
+            # Sample theta uniformly
+            theta = rng.uniform(0.0, np.pi / 2)
+            
+            # For J_ij: k dims at boundary, (n_edges - k) in interior
+            # Work in [0, 1] first, then transform to [-1, 1]
+            J_raw = np.zeros(n_edges)
+            
+            # Choose which k dimensions are at boundary
+            boundary_dims = rng.choice(n_edges, size=k, replace=False) if k > 0 else []
+            interior_dims = [i for i in range(n_edges) if i not in boundary_dims]
+            
+            # Boundary dims: sample from [0, bw] or [1-bw, 1]
+            for d in boundary_dims:
+                if rng.random() < 0.5:
+                    J_raw[d] = rng.uniform(0, boundary_width)
+                else:
+                    J_raw[d] = rng.uniform(1 - boundary_width, 1)
+            
+            # Interior dims: sample from [bw, 1-bw]
+            for d in interior_dims:
+                J_raw[d] = rng.uniform(boundary_width, 1 - boundary_width)
+            
+            # Transform J from [0, 1] to [-1, 1]
+            J_ij = J_raw * 2 - 1
+            
+            all_h_i.append(h_i)
+            all_J_ij.append(J_ij)
+            all_theta.append(theta)
+    
+    return (
+        np.array(all_h_i),
+        np.array(all_J_ij),
+        np.array(all_theta),
+    )
+
+
+def generate_hybrid_samples(
+    n_samples: int,
+    n_qubits: int,
+    n_edges: int,
+    sobol_fraction: float = 0.5,
+    boundary_width: float = 0.1,
+    seed: int = 42,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Generate hybrid samples: mixture of Sobol + stratified boundary sampling.
+    
+    This combines:
+    - Sobol quasi-random: uniform low-discrepancy coverage of full space
+    - Stratified: equal samples per "number of dims at boundary" stratum
+    
+    The result is a mixture distribution:
+        p(x) = sobol_fraction * p_sobol(x) + (1 - sobol_fraction) * p_stratified(x)
+    
+    Args:
+        n_samples: Total samples
+        n_qubits: Number of qubits
+        n_edges: Number of edges
+        sobol_fraction: Fraction from Sobol (default 0.5 = 50/50 mix)
+        boundary_width: Width of boundary region for stratified part
+        seed: Random seed
+    
+    Returns:
+        h_i, J_ij, theta arrays
+    """
+    from scipy.stats import qmc
+    
+    n_sobol = int(n_samples * sobol_fraction)
+    n_stratified = n_samples - n_sobol
+    
+    print(f"    Hybrid mixture: {n_sobol:,} Sobol + {n_stratified:,} stratified")
+    
+    # Part 1: Sobol samples
+    dim = n_qubits + n_edges + 1
+    sampler = qmc.Sobol(d=dim, scramble=True, seed=seed)
+    sobol_raw = sampler.random(n_sobol)
+    
+    sobol_h_i = sobol_raw[:, :n_qubits]  # [0, 1]
+    sobol_J_ij = sobol_raw[:, n_qubits:n_qubits + n_edges] * 2 - 1  # [-1, 1]
+    sobol_theta = sobol_raw[:, -1] * (np.pi / 2)  # [0, π/2]
+    
+    # Part 2: Stratified samples
+    strat_h_i, strat_J_ij, strat_theta = generate_stratified_samples(
+        n_stratified, n_qubits, n_edges, boundary_width, seed=seed + 1000
+    )
+    
+    # Combine
+    all_h_i = np.vstack([sobol_h_i, strat_h_i])
+    all_J_ij = np.vstack([sobol_J_ij, strat_J_ij])
+    all_theta = np.concatenate([sobol_theta, strat_theta])
+    
+    # Shuffle to mix Sobol and stratified samples
+    rng = np.random.default_rng(seed + 2000)
+    perm = rng.permutation(n_samples)
+    
+    return all_h_i[perm], all_J_ij[perm], all_theta[perm]
 
 
 # =============================================================================
@@ -134,6 +279,8 @@ def generate_data(
     seed: int = 42,
     verbose: bool = True,
     chunk_size: int = None,
+    sobol_fraction: float = 0.5,
+    boundary_width: float = 0.1,
 ) -> Dict[str, np.ndarray]:
     """
     Generate quantum ML dataset.
@@ -141,11 +288,13 @@ def generate_data(
     Args:
         n_samples: Total number of samples to generate
         n_qubits: Number of qubits
-        distribution: Distribution name ('random', 'sobol', etc.)
+        distribution: Distribution name ('random', 'sobol', 'hybrid', etc.)
         julia_main: Initialized Julia Main module
         seed: Random seed
         verbose: Print progress
         chunk_size: If set, process Julia calls in chunks with GC between them
+        sobol_fraction: For hybrid dist, fraction from Sobol (default 0.5)
+        boundary_width: For hybrid dist, boundary region width (default 0.1)
     
     Returns dict with:
         X:  ML input [Xi, Jij], shape (N, n_qubits + n_edges)
@@ -225,8 +374,29 @@ def generate_data(
         if verbose:
             print(f"    Random samples saved to disk")
     
+    elif distribution == "hybrid":
+        # Mixture of Sobol + stratified boundary sampling
+        all_h_i, all_J_ij, all_theta = generate_hybrid_samples(
+            n_samples=n_samples,
+            n_qubits=n_qubits,
+            n_edges=n_edges,
+            sobol_fraction=sobol_fraction,
+            boundary_width=boundary_width,
+            seed=seed,
+        )
+        
+        np.save(temp_dir / "h_i.npy", all_h_i)
+        np.save(temp_dir / "J_ij.npy", all_J_ij)
+        np.save(temp_dir / "theta.npy", all_theta)
+        
+        del all_h_i, all_J_ij, all_theta
+        gc.collect()
+        
+        if verbose:
+            print(f"    Hybrid (Sobol + stratified) samples saved to disk")
+    
     else:
-        raise ValueError(f"Unknown distribution: {distribution}. Choose from ['random', 'sobol']")
+        raise ValueError(f"Unknown distribution: {distribution}. Choose from ['random', 'sobol', 'hybrid']")
     
     # =========================================================================
     # Stage 2: Process through Julia in chunks, saving each chunk to disk
@@ -549,8 +719,8 @@ def parse_args():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     
-    parser.add_argument("--dist", required=True, choices=["random", "sobol", "gaussian"],
-                        help="Distribution type (random, sobol, gaussian)")
+    parser.add_argument("--dist", required=True, choices=["random", "sobol", "hybrid", "gaussian"],
+                        help="Distribution type (random, sobol, hybrid, gaussian)")
     parser.add_argument("--n_samples", type=int, required=True,
                         help="Number of samples")
     parser.add_argument("--n_qubits", type=int, required=True,
@@ -568,6 +738,12 @@ def parse_args():
     parser.add_argument("--val_ratio", type=float, default=0.1, help="Validation split")
     parser.add_argument("--chunk_size", type=int, default=None,
                         help="Generate in chunks of this size (helps with memory for large datasets, e.g., 100000)")
+    
+    # Hybrid distribution options
+    parser.add_argument("--sobol_fraction", type=float, default=0.5,
+                        help="Fraction of samples from Sobol (for hybrid dist, default 0.5)")
+    parser.add_argument("--boundary_width", type=float, default=0.1,
+                        help="Boundary region width in [0,1] space (for hybrid dist, default 0.1)")
     
     parser.add_argument("--no_config", action="store_true", help="Skip config generation")
     parser.add_argument("--graph_config", action="store_true", help="Also generate graph config")
@@ -671,6 +847,10 @@ def main():
     print("Quantum Data Generation")
     print("=" * 60)
     print(f"  Distribution:  {args.dist}")
+    if args.dist == "hybrid":
+        print(f"    Sobol frac:  {args.sobol_fraction} ({int(args.n_samples * args.sobol_fraction):,} samples)")
+        print(f"    Stratified:  {1 - args.sobol_fraction} ({args.n_samples - int(args.n_samples * args.sobol_fraction):,} samples)")
+        print(f"    Boundary:    {args.boundary_width} (J in [0,{args.boundary_width}] or [{1-args.boundary_width},1])")
     print(f"  Samples:       {args.n_samples}")
     print(f"  Qubits:        {args.n_qubits}")
     print(f"  Edges:         {n_edges}")
@@ -694,6 +874,8 @@ def main():
         seed=args.seed,
         verbose=not args.quiet,
         chunk_size=args.chunk_size,
+        sobol_fraction=args.sobol_fraction,
+        boundary_width=args.boundary_width,
     )
     
     print("  Shapes:")
