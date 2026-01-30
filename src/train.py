@@ -62,6 +62,75 @@ log = logging.getLogger(__name__)
 # W&B Setup
 # =============================================================================
 
+def build_run_name(cfg: DictConfig) -> str:
+    """
+    Build W&B run name from config fields.
+    
+    Control via CLI:
+        run_name="CUSTOM"                    # Exact name
+        run_name_fields=[model,data,lr]      # Include these fields
+    
+    Available fields:
+        model, data, lr, batch, layers, hidden, arch, epochs
+    
+    Examples:
+        run_name_fields=[model,data,layers,hidden]  → GNN_sobol4q_4L_H128
+        run_name_fields=[model,arch,batch]          → MLP_384x3_B1024
+        run_name_fields=[model,data,lr]             → GNN_sobol4q_LR0.001
+    """
+    # Direct override
+    if cfg.get("run_name"):
+        return cfg.run_name
+    
+    # Default fields if not specified
+    default_fields = ["model", "data", "layers", "hidden", "batch"]
+    fields = list(cfg.get("run_name_fields", default_fields))
+    
+    parts = []
+    
+    for field in fields:
+        if field == "model":
+            parts.append(cfg.model.name.upper())
+        
+        elif field == "data":
+            # Shorten: sobol_4q_graph -> sobol4q
+            name = cfg.data.name.replace("_graph", "").replace("_", "")
+            parts.append(name)
+        
+        elif field == "lr":
+            parts.append(f"LR{cfg.optimizer.lr}")
+        
+        elif field == "batch":
+            parts.append(f"B{cfg.training.batch_size}")
+        
+        elif field == "epochs":
+            parts.append(f"E{cfg.training.epochs}")
+        
+        elif field == "layers":
+            if cfg.model.name == "gnn":
+                parts.append(f"{cfg.model.num_layers}L")
+        
+        elif field == "hidden":
+            if cfg.model.name == "gnn":
+                parts.append(f"H{cfg.model.hidden_dim}")
+            elif cfg.model.name == "mlp":
+                dims = cfg.model.hidden_dims
+                if all(d == dims[0] for d in dims):
+                    parts.append(f"H{dims[0]}x{len(dims)}")
+                else:
+                    parts.append(f"H{dims}")
+        
+        elif field == "arch":
+            # Full architecture string
+            if cfg.model.name == "gnn":
+                parts.append(f"{cfg.model.num_layers}L_H{cfg.model.hidden_dim}")
+            elif cfg.model.name == "mlp":
+                dims = cfg.model.hidden_dims
+                parts.append(f"{dims}")
+    
+    return "_".join(parts)
+
+
 def setup_wandb(cfg: DictConfig, dims: Dict[str, int]) -> Optional[Any]:
     """Initialize Weights & Biases logging."""
     if not cfg.logging.wandb.enabled:
@@ -80,8 +149,8 @@ def setup_wandb(cfg: DictConfig, dims: Dict[str, int]) -> Optional[Any]:
     # Add data dimensions to config
     config_dict["dims"] = dims
     
-    # Auto-generate run name: {model}_{data}_{lr}
-    run_name = f"{cfg.model.name}_{cfg.data.name}_lr{cfg.optimizer.lr}"
+    # Build run name dynamically
+    run_name = build_run_name(cfg)
     
     run = wandb.init(
         project=cfg.logging.wandb.project,

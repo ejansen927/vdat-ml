@@ -1,0 +1,15 @@
+================================================================================
+TOP 10 CHECKPOINTS (sorted by MAE at r=0)
+================================================================================
+Rank  r=0       r=0.05    r=0.25      Checkpoint
+--------------------------------------------------------------------------------
+1     0.002836  0.009946  0.084708    gnn_toy_test/2026-01-29_14-06-59/checkpoints/best.pt
+2     0.007858  0.005718  0.003945    mlp_hybrid1/multirun/2026-01-26_23-06-27/7/checkpoints/best.pt
+3     0.008499  0.004463  0.006125    mlp_hybrid1/multirun/2026-01-26_23-06-27/8/checkpoints/best.pt
+4     0.009736  0.018399  0.003630    gnn_hybrid1/multirun/2026-01-27_00-44-22/8/checkpoints/best.pt
+5     0.012380  0.048316  0.003723    gnn_al_uncertainty2/2026-01-29_03-19-00/checkpoints/best.pt
+6     0.014793  0.009543  0.006912    mlp_sobol1/multirun/2026-01-26_12-02-50/1/checkpoints/best.pt
+7     0.015687  0.008938  0.005788    fair_mlp/multirun/2026-01-25_17-19-23/2/checkpoints/best.pt
+8     0.018422  0.034502  0.001437    default/multirun/2026-01-28_07-00-48/35/checkpoints/best.pt
+9     0.019695  0.007654  0.004578    mlp_hybrid1/multirun/2026-01-26_23-06-27/6/checkpoints/best.pt
+10    0.019953  0.024032  0.002872    gnn_hybrid1/multirun/2026-01-27_00-44-22/3/checkpoints/best.pt

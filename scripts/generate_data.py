@@ -120,7 +120,68 @@ DISTRIBUTIONS = {
     "gaussian": sample_gaussian,
     "sobol": None,  # Handled directly in generate_data
     "hybrid": None,  # Handled directly in generate_data
+    "sweep": None,   # Handled directly in generate_data (theta sweep)
 }
+
+
+def generate_sweep_samples(
+    n_base: int,
+    n_theta: int,
+    n_qubits: int,
+    n_edges: int,
+    base_dist: str = "random",
+    seed: int = 42,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Generate sweep samples: n_base [h_i, J_ij] points × n_theta theta values.
+    
+    Instead of randomly sampling theta, we systematically sweep it from 0 to π/2.
+    This helps the model learn the theta dependence more systematically.
+    
+    Total samples = n_base × n_theta
+    
+    Args:
+        n_base: Number of base [h_i, J_ij] configurations
+        n_theta: Number of theta values to sweep (equally spaced in [0, π/2])
+        n_qubits: Number of qubits
+        n_edges: Number of edges
+        base_dist: Distribution for [h_i, J_ij] ('random' or 'sobol')
+        seed: Random seed
+    
+    Returns:
+        h_i: (n_base * n_theta, n_qubits)
+        J_ij: (n_base * n_theta, n_edges)
+        theta: (n_base * n_theta,)
+    """
+    from scipy.stats import qmc
+    
+    rng = np.random.default_rng(seed)
+    n_total = n_base * n_theta
+    
+    # Generate base [h_i, J_ij] samples
+    if base_dist == "sobol":
+        dim = n_qubits + n_edges
+        sampler = qmc.Sobol(d=dim, scramble=True, seed=seed)
+        raw = sampler.random(n_base)
+        base_h_i = raw[:, :n_qubits]  # [0, 1]
+        base_J_ij = raw[:, n_qubits:] * 2 - 1  # [-1, 1]
+    else:  # random
+        base_h_i = rng.uniform(0.0, 1.0, size=(n_base, n_qubits))
+        base_J_ij = rng.uniform(-1.0, 1.0, size=(n_base, n_edges))
+    
+    # Create theta sweep values (equally spaced from 0 to π/2, inclusive)
+    theta_values = np.linspace(0, np.pi / 2, n_theta)
+    
+    # Expand: each base sample gets all theta values
+    # Result: for each (h_i, J_ij) pair, we have n_theta samples with different theta
+    all_h_i = np.repeat(base_h_i, n_theta, axis=0)      # (n_total, n_qubits)
+    all_J_ij = np.repeat(base_J_ij, n_theta, axis=0)    # (n_total, n_edges)
+    all_theta = np.tile(theta_values, n_base)           # (n_total,)
+    
+    # Shuffle to avoid having all same-config samples together during training
+    perm = rng.permutation(n_total)
+    
+    return all_h_i[perm], all_J_ij[perm], all_theta[perm]
 
 
 def generate_stratified_samples(
@@ -281,6 +342,9 @@ def generate_data(
     chunk_size: int = None,
     sobol_fraction: float = 0.5,
     boundary_width: float = 0.1,
+    sweep_n_base: int = None,
+    sweep_n_theta: int = 10,
+    sweep_base_dist: str = "random",
 ) -> Dict[str, np.ndarray]:
     """
     Generate quantum ML dataset.
@@ -288,13 +352,16 @@ def generate_data(
     Args:
         n_samples: Total number of samples to generate
         n_qubits: Number of qubits
-        distribution: Distribution name ('random', 'sobol', 'hybrid', etc.)
+        distribution: Distribution name ('random', 'sobol', 'hybrid', 'sweep')
         julia_main: Initialized Julia Main module
         seed: Random seed
         verbose: Print progress
         chunk_size: If set, process Julia calls in chunks with GC between them
         sobol_fraction: For hybrid dist, fraction from Sobol (default 0.5)
         boundary_width: For hybrid dist, boundary region width (default 0.1)
+        sweep_n_base: For sweep dist, number of base [h_i, J_ij] configs
+        sweep_n_theta: For sweep dist, number of theta points (default 10)
+        sweep_base_dist: For sweep dist, base distribution ('random' or 'sobol')
     
     Returns dict with:
         X:  ML input [Xi, Jij], shape (N, n_qubits + n_edges)
@@ -395,8 +462,32 @@ def generate_data(
         if verbose:
             print(f"    Hybrid (Sobol + stratified) samples saved to disk")
     
+    elif distribution == "sweep":
+        # Theta sweep: n_base configs × n_theta sweep points
+        all_h_i, all_J_ij, all_theta = generate_sweep_samples(
+            n_base=sweep_n_base,
+            n_theta=sweep_n_theta,
+            n_qubits=n_qubits,
+            n_edges=n_edges,
+            base_dist=sweep_base_dist,
+            seed=seed,
+        )
+        
+        # Verify we got the right number
+        assert len(all_h_i) == n_samples, f"Sweep generated {len(all_h_i)} samples, expected {n_samples}"
+        
+        np.save(temp_dir / "h_i.npy", all_h_i)
+        np.save(temp_dir / "J_ij.npy", all_J_ij)
+        np.save(temp_dir / "theta.npy", all_theta)
+        
+        del all_h_i, all_J_ij, all_theta
+        gc.collect()
+        
+        if verbose:
+            print(f"    Sweep ({sweep_n_base:,} configs × {sweep_n_theta} theta) samples saved to disk")
+    
     else:
-        raise ValueError(f"Unknown distribution: {distribution}. Choose from ['random', 'sobol', 'hybrid']")
+        raise ValueError(f"Unknown distribution: {distribution}. Choose from ['random', 'sobol', 'hybrid', 'sweep']")
     
     # =========================================================================
     # Stage 2: Process through Julia in chunks, saving each chunk to disk
@@ -719,10 +810,10 @@ def parse_args():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     
-    parser.add_argument("--dist", required=True, choices=["random", "sobol", "hybrid", "gaussian"],
-                        help="Distribution type (random, sobol, hybrid, gaussian)")
+    parser.add_argument("--dist", required=True, choices=["random", "sobol", "hybrid", "sweep", "gaussian"],
+                        help="Distribution type (random, sobol, hybrid, sweep, gaussian)")
     parser.add_argument("--n_samples", type=int, required=True,
-                        help="Number of samples")
+                        help="Number of samples (for sweep: must equal n_base × n_theta)")
     parser.add_argument("--n_qubits", type=int, required=True,
                         help="Number of qubits")
     
@@ -744,6 +835,15 @@ def parse_args():
                         help="Fraction of samples from Sobol (for hybrid dist, default 0.5)")
     parser.add_argument("--boundary_width", type=float, default=0.1,
                         help="Boundary region width in [0,1] space (for hybrid dist, default 0.1)")
+    
+    # Sweep distribution options
+    parser.add_argument("--sweep_n_base", type=int, default=None,
+                        help="Number of base [h_i, J_ij] configs (for sweep dist). "
+                             "If not set, computed as n_samples / sweep_n_theta")
+    parser.add_argument("--sweep_n_theta", type=int, default=10,
+                        help="Number of theta values to sweep (for sweep dist, default 10)")
+    parser.add_argument("--sweep_base_dist", choices=["random", "sobol"], default="random",
+                        help="Distribution for base [h_i, J_ij] samples (for sweep dist)")
     
     parser.add_argument("--no_config", action="store_true", help="Skip config generation")
     parser.add_argument("--graph_config", action="store_true", help="Also generate graph config")
@@ -825,6 +925,25 @@ def main():
     
     julia_file = Path(args.julia_file) if args.julia_file else DEFAULT_JULIA_FILE
     
+    # Handle sweep distribution parameters
+    sweep_n_base = args.sweep_n_base
+    if args.dist == "sweep":
+        if sweep_n_base is None:
+            # Compute n_base from n_samples and n_theta
+            if args.n_samples % args.sweep_n_theta != 0:
+                print(f"ERROR: For sweep distribution, n_samples ({args.n_samples}) must be "
+                      f"divisible by sweep_n_theta ({args.sweep_n_theta})")
+                print(f"  Try: --n_samples {(args.n_samples // args.sweep_n_theta) * args.sweep_n_theta}")
+                return
+            sweep_n_base = args.n_samples // args.sweep_n_theta
+        else:
+            # Validate consistency
+            expected_samples = sweep_n_base * args.sweep_n_theta
+            if expected_samples != args.n_samples:
+                print(f"ERROR: n_samples ({args.n_samples}) != sweep_n_base ({sweep_n_base}) × "
+                      f"sweep_n_theta ({args.sweep_n_theta}) = {expected_samples}")
+                return
+    
     # Determine output directory
     if args.output:
         output_dir = Path(args.output)
@@ -851,7 +970,11 @@ def main():
         print(f"    Sobol frac:  {args.sobol_fraction} ({int(args.n_samples * args.sobol_fraction):,} samples)")
         print(f"    Stratified:  {1 - args.sobol_fraction} ({args.n_samples - int(args.n_samples * args.sobol_fraction):,} samples)")
         print(f"    Boundary:    {args.boundary_width} (J in [0,{args.boundary_width}] or [{1-args.boundary_width},1])")
-    print(f"  Samples:       {args.n_samples}")
+    elif args.dist == "sweep":
+        print(f"    Base configs: {sweep_n_base:,} [h_i, J_ij] points ({args.sweep_base_dist})")
+        print(f"    Theta sweep:  {args.sweep_n_theta} points in [0, π/2]")
+        print(f"    Total:        {sweep_n_base:,} × {args.sweep_n_theta} = {args.n_samples:,} samples")
+    print(f"  Samples:       {args.n_samples:,}")
     print(f"  Qubits:        {args.n_qubits}")
     print(f"  Edges:         {n_edges}")
     print(f"  Seed:          {args.seed}")
@@ -865,7 +988,7 @@ def main():
     print("  Ready")
     print()
     
-    print(f"[2/4] Generating {args.n_samples} samples...")
+    print(f"[2/4] Generating {args.n_samples:,} samples...")
     data = generate_data(
         n_samples=args.n_samples,
         n_qubits=args.n_qubits,
@@ -876,6 +999,9 @@ def main():
         chunk_size=args.chunk_size,
         sobol_fraction=args.sobol_fraction,
         boundary_width=args.boundary_width,
+        sweep_n_base=sweep_n_base,
+        sweep_n_theta=args.sweep_n_theta,
+        sweep_base_dist=args.sweep_base_dist,
     )
     
     print("  Shapes:")

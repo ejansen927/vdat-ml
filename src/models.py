@@ -197,7 +197,7 @@ class GNN(nn.Module):
     
     Architecture:
         1. Node encoder: Linear(node_dim -> hidden_dim)
-        2. N InteractiveNet layers for message passing
+        2. N InteractiveNet layers for message passing (with dropout)
         3. Edge decoder: MLP([h_src, h_dst, J_ij] -> prediction)
     
     Output is edge-level predictions with Tanh activation (bounded [-1, 1]).
@@ -210,8 +210,8 @@ class GNN(nn.Module):
         hidden_dim: int = 128,
         num_layers: int = 3,
         activation: str = "silu",
-        norm: str = "layer_norm",  # kept for config compatibility, not used
-        dropout: float = 0.0,       # kept for config compatibility, not used
+        norm: str = "layer_norm",  # kept for config compatibility
+        dropout: float = 0.0,
         **kwargs,
     ):
         super().__init__()
@@ -219,11 +219,15 @@ class GNN(nn.Module):
         self.node_dim = node_dim
         self.edge_dim = edge_dim
         self.hidden_dim = hidden_dim
+        self.dropout = dropout
         
         act_fn = get_activation(activation)
         
         # Node encoder
         self.node_encoder = nn.Linear(node_dim, hidden_dim)
+        
+        # Dropout layer (applied after encoder and each message passing layer)
+        self.dropout_layer = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         
         # Message passing layers
         self.layers = nn.ModuleList([
@@ -231,15 +235,27 @@ class GNN(nn.Module):
             for _ in range(num_layers)
         ])
         
-        # Edge decoder
-        self.edge_decoder = nn.Sequential(
-            nn.Linear(hidden_dim * 2 + 1, hidden_dim),
-            act_fn,
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            act_fn,
-            nn.Linear(hidden_dim // 2, 1),
-            nn.Tanh(),  # Bounded output [-1, 1]
-        )
+        # Edge decoder with dropout
+        if dropout > 0:
+            self.edge_decoder = nn.Sequential(
+                nn.Linear(hidden_dim * 2 + 1, hidden_dim),
+                act_fn,
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                act_fn,
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim // 2, 1),
+                nn.Tanh(),  # Bounded output [-1, 1]
+            )
+        else:
+            self.edge_decoder = nn.Sequential(
+                nn.Linear(hidden_dim * 2 + 1, hidden_dim),
+                act_fn,
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                act_fn,
+                nn.Linear(hidden_dim // 2, 1),
+                nn.Tanh(),  # Bounded output [-1, 1]
+            )
     
     def forward(self, data) -> torch.Tensor:
         """
@@ -256,15 +272,17 @@ class GNN(nn.Module):
         
         # Encode nodes
         h = self.node_encoder(x_dense)  # (B, N, hidden_dim)
+        h = self.dropout_layer(h)
         
         # Build dense adjacency with J values
         adj_J = to_dense_adj(data.edge_index, data.batch, data.edge_attr).squeeze(-1)
         # Make symmetric (J_ij = J_ji)
         adj_J = adj_J + adj_J.transpose(1, 2)
         
-        # Message passing
+        # Message passing with dropout after each layer
         for layer in self.layers:
             h = layer(h, adj_J)
+            h = self.dropout_layer(h)
         
         # Decode edges
         batch_idx = data.batch[data.edge_index[0]]
