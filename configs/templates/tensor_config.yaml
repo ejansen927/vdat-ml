@@ -1,0 +1,21 @@
+# ${config_name} Dataset Configuration (Tensor/MLP)
+# Auto-generated on ${timestamp}
+
+_target_: data.QuantumDataset
+name: "${config_name}"
+
+root: "${data_dir}"
+train_file: "train.pt"
+val_file: "val.pt"
+test_file: "test.pt"
+
+is_graph: false
+
+input_dim: ${input_dim}
+output_dim: ${output_dim}
+n_qubits: ${n_qubits}
+n_edges: ${n_edges}
+
+batch_size: $${training.batch_size}
+num_workers: 4
+pin_memory: true

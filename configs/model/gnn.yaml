@@ -27,3 +27,5 @@ norm: "layer_norm"
 
 # Dropout probability (0.0 to disable)
 dropout: 0.0
+
+pooling: "mean"

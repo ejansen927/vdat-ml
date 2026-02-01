@@ -22,6 +22,8 @@ import torch
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 
+from models import GNN, MLP
+from torch import nn
 
 # =============================================================================
 # Data Loading
@@ -61,15 +63,13 @@ def compute_Jij(r: float, n_qubits: int = 4):
     Returns:
         Jij: (n_edges,) array in canonical edge order
     """
-    if n_qubits != 4:
+    if n_qubits != 4: # currently im only doing 4 qubits
         raise NotImplementedError("Only 4 qubits supported currently")
     
     J12, J34 = 1.0, 1.0
     J14, J23 = (1 - 2*r), (1 - 2*r)
     J13, J24 = (1 - 3*r), (1 - 3*r)
     
-    # Edge order: (0,1), (0,2), (0,3), (1,2), (1,3), (2,3)
-    # = J12, J13, J14, J23, J24, J34
     return np.array([J12, J13, J14, J23, J24, J34])
 
 
@@ -113,13 +113,14 @@ def load_model(checkpoint_path: str, device: str = "cpu"):
     Supports:
         - Framework format: 'config' and 'model_state_dict' keys
         - Old format: 'model_state_dict' and 'model_kwargs' keys
+        - Old GNN architecture (with LayerNorm in edge_decoder)
+        - New GNN architecture (without LayerNorm)
     """
     # Add src to path for model imports
     src_path = Path(__file__).parent.parent / "src"
     if str(src_path) not in sys.path:
         sys.path.insert(0, str(src_path))
     
-    from models import GNN, MLP
     
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     
@@ -128,46 +129,39 @@ def load_model(checkpoint_path: str, device: str = "cpu"):
     if state_dict is None:
         raise ValueError(f"No model weights found. Keys: {list(ckpt.keys())}")
     
-    # Framework format: has 'config' with nested model/data info
-    if "config" in ckpt or "cfg" in ckpt:
-        cfg = ckpt.get("config") or ckpt.get("cfg")
-        model_name = cfg.get("model", {}).get("name", "gnn")
+    # Detect if this is a GNN
+    is_gnn = any("node_encoder" in k or "edge_decoder" in k for k in state_dict.keys())
+    
+    if is_gnn:
+        # Infer architecture from state_dict
+        hidden_dim = state_dict.get("node_encoder.weight", torch.zeros(128, 1)).shape[0]
+        num_layers = sum(1 for k in state_dict if k.startswith("layers.") and k.endswith(".msg_mlp.0.weight"))
         
-        if model_name == "gnn":
-            model = GNN(
-                node_dim=cfg["model"].get("node_dim", 1),
-                edge_dim=cfg["model"].get("edge_dim", 1),
-                hidden_dim=cfg["model"].get("hidden_dim", 128),
-                num_layers=cfg["model"].get("num_layers", 3),
-                activation=cfg["model"].get("activation", "silu"),
-            )
-        else:
+            
+        model = GNN(
+            node_dim=1,
+            edge_dim=1,
+            hidden_dim=hidden_dim,
+            num_layers=num_layers,
+            activation="silu",
+        )
+        
+        cfg = {"model": {"name": "gnn", "hidden_dim": hidden_dim, "num_layers": num_layers}}
+        
+        model.load_state_dict(state_dict)
+    
+    else: # this reads the MLP case and handles different pytorch loading cases
+        # MLP
+        if "config" in ckpt or "cfg" in ckpt:
+            cfg = ckpt.get("config") or ckpt.get("cfg")
             model = MLP(
                 input_dim=cfg["data"].get("input_dim", 10),
                 output_dim=cfg["data"].get("output_dim", 6),
                 hidden_dims=cfg["model"].get("hidden_dims", [128, 256, 128]),
                 activation=cfg["model"].get("activation", "silu"),
             )
-        
-        model.load_state_dict(state_dict)
-        
-    # Old format: has 'model_kwargs' with flat params
-    elif "model_kwargs" in ckpt:
-        model_kwargs = ckpt["model_kwargs"]
-        
-        # Detect model type from state dict keys
-        is_gnn = any("node_encoder" in k or "edge_decoder" in k for k in state_dict.keys())
-        
-        if is_gnn:
-            model = GNN(
-                node_dim=model_kwargs.get("node_dim", 1),
-                edge_dim=model_kwargs.get("edge_dim", 1),
-                hidden_dim=model_kwargs.get("hidden", model_kwargs.get("hidden_dim", 128)),
-                num_layers=model_kwargs.get("layers", model_kwargs.get("num_layers", 3)),
-                activation="silu",
-            )
-            cfg = {"model": {"name": "gnn", **model_kwargs}}
-        else:
+        elif "model_kwargs" in ckpt:
+            model_kwargs = ckpt["model_kwargs"]
             model = MLP(
                 input_dim=model_kwargs.get("input_dim", 10),
                 output_dim=model_kwargs.get("output_dim", 6),
@@ -175,29 +169,6 @@ def load_model(checkpoint_path: str, device: str = "cpu"):
                 activation="silu",
             )
             cfg = {"model": {"name": "mlp", **model_kwargs}}
-        
-        model.load_state_dict(state_dict)
-    
-    # Unknown format - try to infer from state dict
-    else:
-        print(f"Warning: Unknown checkpoint format. Keys: {list(ckpt.keys())}")
-        print("Attempting to infer model type from state dict...")
-        
-        is_gnn = any("node_encoder" in k or "edge_decoder" in k for k in state_dict.keys())
-        
-        if is_gnn:
-            # Try to infer hidden dim from state dict
-            hidden_dim = state_dict.get("node_encoder.weight", torch.zeros(128, 1)).shape[0]
-            num_layers = max(int(k.split(".")[1]) for k in state_dict if k.startswith("layers.")) + 1
-            
-            model = GNN(
-                node_dim=1,
-                edge_dim=1,
-                hidden_dim=hidden_dim,
-                num_layers=num_layers,
-                activation="silu",
-            )
-            cfg = {"model": {"name": "gnn", "hidden_dim": hidden_dim, "num_layers": num_layers}}
         else:
             model = MLP(
                 input_dim=10,
@@ -219,14 +190,14 @@ def load_model(checkpoint_path: str, device: str = "cpu"):
 # Inference
 # =============================================================================
 
-def run_inference(model, xi_i, Jij_single, n_qubits: int = 4, device: str = "cpu", is_gnn: bool = True):
+def run_inference(model, xi_i, Jij_i, n_qubits: int = 4, device: str = "cpu", is_gnn: bool = True):
     """
     Run model inference.
     
     Args:
         model: Loaded model (GNN or MLP)
         xi_i: (N, n_qubits) array of single-site expectation values
-        Jij_single: (n_edges,) array of coupling values (same for all samples)
+        Jij_i: (n_edges,) array of coupling values (same for all samples)
         n_qubits: Number of qubits
         device: Device to run on
         is_gnn: Whether model is GNN (True) or MLP (False)
@@ -242,7 +213,7 @@ def run_inference(model, xi_i, Jij_single, n_qubits: int = 4, device: str = "cpu
     X_i = 2 * xi_i
     
     # Tile Jij for all samples
-    Jij = np.tile(Jij_single, (N, 1))
+    Jij = np.tile(Jij_i, (N, 1))
     
     if is_gnn:
         # GNN path - use graph data
@@ -282,9 +253,29 @@ def run_inference(model, xi_i, Jij_single, n_qubits: int = 4, device: str = "cpu
 # Plotting
 # =============================================================================
 
+def plot_points(x_data, y_data, dot_offset=0):
+    """Plot data points on canvas."""
+    for x, y in zip(x_data, y_data):
+        # Map to effective coordinates
+        ex = int((x - x_min) / (x_max - x_min) * (eff_width - 1))
+        ey = int((y - y_min) / (y_max - y_min) * (eff_height - 1))
+        ey = eff_height - 1 - ey  # Flip y
+        
+        # Map to character coordinates
+        cx = ex // 2
+        cy = ey // 4
+        
+        # Dot position within character
+        dx = ex % 2
+        dy = ey % 4
+        
+        if 0 <= cx < width and 0 <= cy < height:
+            canvas[cy][cx] |= DOT_MAP[dy][dx]
+
 def plot_terminal(xi_avg, O_truth, O_pred, r_value, title="O vs ξ", width=80, height=25):
     """
-    High-quality Unicode terminal plot.
+    Implementation of a Unicode terminal plot, based on:
+    https://github.com/asciimoo/drawille
     
     Uses Braille characters for fine resolution (2x4 dots per character = 160x100 effective resolution).
     """
@@ -321,25 +312,6 @@ def plot_terminal(xi_avg, O_truth, O_pred, r_value, title="O vs ξ", width=80, h
     
     # Initialize canvas
     canvas = [[0 for _ in range(width)] for _ in range(height)]
-    
-    def plot_points(x_data, y_data, dot_offset=0):
-        """Plot data points on canvas."""
-        for x, y in zip(x_data, y_data):
-            # Map to effective coordinates
-            ex = int((x - x_min) / (x_max - x_min) * (eff_width - 1))
-            ey = int((y - y_min) / (y_max - y_min) * (eff_height - 1))
-            ey = eff_height - 1 - ey  # Flip y
-            
-            # Map to character coordinates
-            cx = ex // 2
-            cy = ey // 4
-            
-            # Dot position within character
-            dx = ex % 2
-            dy = ey % 4
-            
-            if 0 <= cx < width and 0 <= cy < height:
-                canvas[cy][cx] |= DOT_MAP[dy][dx]
     
     # Plot prediction (all dots)
     plot_points(xi_avg, O_pred)
@@ -560,6 +532,12 @@ def main():
         Jij_single = compute_Jij(r, args.n_qubits)
         ZiZj_pred, O_pred = run_inference(model, xi_i, Jij_single, args.n_qubits, args.device, is_gnn)
         print(f"  O_pred range: [{O_pred.min():.4f}, {O_pred.max():.4f}]")
+        
+        # Always print error stats
+        diff = O_pred - O_truth
+        mse = np.mean(diff ** 2)
+        mae = np.mean(np.abs(diff))
+        print(f"  Error:   MSE={mse:.6f}  MAE={mae:.6f}")
         
         # Save CSV
         csv_path = output_dir / f"{ckpt_path.stem}_r{r}.csv"

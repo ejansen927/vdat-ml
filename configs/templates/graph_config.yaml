@@ -1,0 +1,21 @@
+# ${config_name} Dataset Configuration (Graph/GNN)
+# Auto-generated on ${timestamp}
+
+_target_: data.QuantumGraphDataset
+name: "${config_name}"
+
+root: "${data_dir}"
+train_file: "train.pt"
+val_file: "val.pt"
+test_file: "test.pt"
+
+is_graph: true
+
+n_qubits: ${n_qubits}
+input_dim: ${input_dim}
+output_dim: ${output_dim}
+n_edges: ${n_edges}
+
+batch_size: $${training.batch_size}
+num_workers: 4
+pin_memory: true

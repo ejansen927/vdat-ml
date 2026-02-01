@@ -4,6 +4,7 @@
 
 # Data (large files)
 data/
+*.txt
 
 # Hydra outputs
 outputs/
@@ -22,6 +23,9 @@ __pycache__/
 .venv/
 venv/
 env/
+scripts/tmp
+src/tmp
+src/backup
 
 # W&B
 wandb/
