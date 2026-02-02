@@ -2,15 +2,9 @@
 # Conda Environment: vdat-ml (GPU)
 # =============================================================================
 #
-# Install:
+# to install do THIS:
 #   conda env create -f env-gpu.yaml
 #   conda activate vdat-ml
-#
-#   # Then install PyG packages from their wheel index:
-#   pip install torch-scatter torch-sparse -f https://data.pyg.org/whl/torch-2.5.1+cu118.html
-#   pip install torch-geometric
-#
-# =============================================================================
 
 name: vdat-ml
 
@@ -21,32 +15,21 @@ channels:
   - defaults
 
 dependencies:
-  # Python
-  - python=3.10
-  
-  # PyTorch (CUDA 11.8 - matches your working setup)
+  - python=3.10  
   - pytorch=2.5.1=py3.10_cuda11.8_cudnn9.1.0_0
   - pytorch-cuda=11.8
   - torchaudio=2.5.1=py310_cu118
-  - torchvision=0.20.1=py310_cu118
-  
-  # CUDA libraries
+  - torchvision=0.20.1=py310_cu118  
   - cuda-cudart=11.8.89
   - cuda-libraries=11.8.0
   - cuda-nvrtc=11.8.89
-  - cuda-runtime=11.8.0
-  
-  # Scientific computing
+  - cuda-runtime=11.8.0  
   - numpy=1.26.4
   - scipy=1.15.2
   - pandas
-  - scikit-learn
-  
-  # Configuration & logging
+  - scikit-learn  
   - pyyaml
   - tqdm
-  
-  # Utilities
   - colorlog
   - joblib
   
@@ -54,21 +37,11 @@ dependencies:
   
   # pip packages
   - pip:
-    # Hydra configuration
     - hydra-core>=1.3.0
-    - omegaconf>=2.3.0
-    
-    # Weights & Biases
-    - wandb>=0.15.0
-    
-    # Julia interface
+    - omegaconf>=2.3.0    
+    - wandb>=0.15.0    
     - julia>=0.6.0
-
-# =============================================================================
-# POST-INSTALL: Run these commands after conda env create:
-#
-#   conda activate vdat-ml
-#   pip install torch-scatter torch-sparse -f https://data.pyg.org/whl/torch-2.5.1+cu118.html
-#   pip install torch-geometric
-#
-# =============================================================================
+    - --find-links https://data.pyg.org/whl/torch-2.5.1+cu118.html
+    - torch-scatter
+    - torch-sparse
+    - torch-geometric
