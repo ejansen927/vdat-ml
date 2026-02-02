@@ -27,7 +27,7 @@ python scripts/generate_data.py --dist random --n_samples 5000 --n_qubits 4 --ou
 Available data distributions:
 - random
 - sobol (quasi-random, fills space evenly)
-- normal
+- normal (normalizes J values, sets h field = 0, theta=pi/2)
 
 Output:
 ```
