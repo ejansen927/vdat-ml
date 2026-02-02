@@ -28,6 +28,7 @@ Available data distributions:
 - random
 - sobol (quasi-random, fills space evenly)
 - normal (normalizes J values, sets h field = 0, theta=pi/2)
+- coulomb (same as above but all J's are positive)
 
 Output:
 ```
