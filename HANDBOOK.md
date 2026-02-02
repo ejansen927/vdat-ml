@@ -4,7 +4,9 @@ Quick reference for running experiments.
 
 ---
 
-## Exact Diagonalization Data Generation with Transverse Field Ising Model
+## Data Generation
+
+Exact Diagonalization Data Generation with Transverse Field Ising Model in Julia, save as a torch .pt file.
 
 ```bash
 # for a basic test: 1000 samples, 4 qubits
