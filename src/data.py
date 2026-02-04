@@ -8,7 +8,7 @@ Two VDAT dataset types:
 Data files are .pt (torch.save) containing:
     - "X": ML input [Xi, Jij], shape (N, n_qubits + n_edges)
     - "y": ML target [ZZij], shape (N, n_edges)
-    - "A": Algorithm input [hi, Jij, theta] (optional, for reference)
+    - "A": Algorithm input [hi, Jij, theta] (the exact input to the VDAT code)
 """
 
 import itertools
@@ -63,17 +63,17 @@ class QuantumDataset(Dataset):
         if not data_path.exists():
             raise FileNotFoundError(f"Data file not found: {data_path}")
         
-        # Load data
+        # loading data here
         data = torch.load(data_path, weights_only=False)
         
         self.X = data["X"].float()
         self.y = data["y"].float()
         
-        # Ensure y has correct shape
+        # ensure y has correct shape
         if self.y.dim() == 1:
             self.y = self.y.unsqueeze(-1)
         
-        # Store metadata if present
+        # store metadata if present
         self.metadata = {k: v for k, v in data.items() if k not in ["X", "y"]}
     
     def __len__(self) -> int:
