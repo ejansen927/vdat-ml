@@ -3,19 +3,11 @@
 Main training script with Hydra configuration and W&B logging.
 
 Usage:
-    # Basic run
-    python src/train.py
-    
-    # Override model
     python src/train.py model=gnn data=random_4q_graph
     
-    # Override hyperparameters
+    # also can set hyperparameters (or do a grid search with -m)
     python src/train.py model=mlp optimizer.lr=1e-4 training.epochs=200
-    
-    # Multirun sweep
     python src/train.py -m model=mlp,gnn optimizer.lr=1e-3,1e-4
-    
-    # Debug mode (no W&B, few epochs)
     python src/train.py experiment=debug
 """
 
@@ -57,6 +49,7 @@ from utils import (
 
 log = logging.getLogger(__name__)
 
+torch.set_default_dtype(torch.float64)
 
 # =============================================================================
 # W&B Setup
@@ -193,10 +186,19 @@ def train_epoch(
             x, target = x.to(device), target.to(device)
             pred = model(x)
         
+        #if loss_meter.count == 0:
+            #print(f"temp, input dtype: {batch.x.dtype if is_graph else x.dtype}")
+            #print(f"target dtype: {target.dtype}")
+            #print(f"pred dtype: {pred.dtype}")
+
         loss = criterion(pred, target)
         
         optimizer.zero_grad()
         loss.backward()
+
+        #total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=float('inf'))
+        #print(f"Gradient norm: {total_norm:.4f}")
+
         optimizer.step()
         
         loss_meter.update(loss.item(), target.size(0))
@@ -311,9 +313,10 @@ def main(cfg: DictConfig):
     is_graph = cfg.data.get("is_graph", False)
     
     # Build model
-    model = build_model(cfg, dims).to(device)
+    model = build_model(cfg, dims).double().to(device)
     param_counts = count_parameters(model)
     log.info(f"Model: {cfg.model.name} | Parameters: {format_parameters(param_counts['trainable'])} trainable")
+    log.info(f"Model dtype: {next(model.parameters()).dtype}")
     
     # Initialize W&B
     wandb_run = setup_wandb(cfg, dims)

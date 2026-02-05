@@ -66,8 +66,8 @@ class QuantumDataset(Dataset):
         # loading data here
         data = torch.load(data_path, weights_only=False)
         
-        self.X = data["X"].float()
-        self.y = data["y"].float()
+        self.X = data["X"].double()
+        self.y = data["y"].double()
         
         # ensure y has correct shape
         if self.y.dim() == 1:
@@ -140,8 +140,8 @@ class QuantumGraphDataset(Dataset):
         # Load data
         data = torch.load(data_path, weights_only=False)
         
-        self.X = data["X"].float()
-        self.y = data["y"].float()
+        self.X = data["X"].double()
+        self.y = data["y"].double()
         
         if self.y.dim() == 1:
             self.y = self.y.unsqueeze(-1)
