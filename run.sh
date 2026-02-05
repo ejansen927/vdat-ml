@@ -3,7 +3,7 @@
 
 python src/train.py -m \
     model=gnn \
-    data=normal_4q_graph \
+    data=normal_1M_graph \
     model.num_layers=4 \
     model.hidden_dim=256 \
     optimizer=adamw \
