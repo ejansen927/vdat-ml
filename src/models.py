@@ -2,12 +2,10 @@
 Model definitions: MLP and GNN.
 
 MLP:
-    - Takes raw tensors (batch, input_dim) -> (batch, output_dim)
+    - simple architecture (batch, input_dim) -> (batch, output_dim)
     
 GNN:
-    - Takes PyG Data objects
-    - Uses InteractiveNet message passing (custom architecture)
-    - Outputs edge-level predictions
+    - transforms data via PyG graph data objects, message passing -> output
 """
 
 import torch
@@ -17,10 +15,6 @@ from torch_geometric.utils import to_dense_batch, to_dense_adj
 
 # set to float64 (double), this is important
 torch.set_default_dtype(torch.float64)
-
-# =============================================================================
-# Activation / Normalization Helpers
-# =============================================================================
 
 ACTIVATIONS = {
     "relu": nn.ReLU,
@@ -185,7 +179,7 @@ class InteractiveNet(nn.Module):
         h_source = h.unsqueeze(1).repeat(1, N, 1, 1)  # (B, N, N, D)
         h_target = h.unsqueeze(2).repeat(1, 1, N, 1)
 
-        # more efficient? look into:
+        # possibly more efficient? look into later:
         #h_source = h.unsqueeze(1).expand(B, N, N, D)
         #h_target = h.unsqueeze(2).expand(B, N, N, D)
 
@@ -228,11 +222,11 @@ class InteractiveNet(nn.Module):
         else:
             raise ValueError(f"Unknown pooling method here, {self.pooling}")
         
-        # Update nodes with residual
+        # update nodes at each step
         update_input = torch.cat([h, agg_msgs], dim=-1)
         dh = self.update_mlp(update_input)
         
-        # adding a gate here, testing:
+        # adding a gate here, testing: https://docs.pytorch.org/docs/stable/generated/torch.nn.GRU.html
         gate = torch.sigmoid(self.gate_layer(torch.cat([h, dh], dim=-1)))
         h = gate * h + (1 - gate) * dh
 
@@ -261,8 +255,8 @@ class GNN(nn.Module):
         hidden_dim: int = 128,
         num_layers: int = 3,
         activation: str = "silu",
-        norm: str = "layer_norm",  # kept for config compatibility, not used
-        dropout: float = 0.0,       # kept for config compatibility, not used
+        norm: str = "layer_norm",  
+        dropout: float = 0.0, 
         pooling: str = "mean",
         **kwargs,
     ):
@@ -311,13 +305,13 @@ class GNN(nn.Module):
         Returns:
             Edge predictions, shape (num_edges_in_batch, 1)
         """
-        # Convert to dense batch format
+        # convert to dense batch format
         x_dense, mask = to_dense_batch(data.x, data.batch)  # (B, N, node_dim)
         
-        # Encode nodes
+        # encode the nodes to some h_dim dimensional vector
         h = self.node_encoder(x_dense)  # (B, N, hidden_dim)
         
-        # Build dense adjacency with J values
+        # build graph dense adjacency matrix using J values
         adj_J = to_dense_adj(data.edge_index, data.batch, data.edge_attr).squeeze(-1)
 
         # Make symmetric (J_ij = J_ji)
@@ -325,7 +319,7 @@ class GNN(nn.Module):
         
         e = self.edge_encoder(adj_J.unsqueeze(-1))
 
-        # Message passing
+        # run L layers of message passing
         for layer in self.layers:
             #h = layer(h, adj_J)
             #h = layer(h, e)
@@ -340,7 +334,6 @@ class GNN(nn.Module):
         dst_local = data.edge_index[1] % N
 
         # tmp remove this:
-        # Gather node embeddings for each edge
         #h_src = h[batch_idx, src_local]
         #h_dst = h[batch_idx, dst_local]
 
@@ -355,7 +348,7 @@ class GNN(nn.Module):
 
         # try with edges:
         e_ij = e[batch_idx, src_local, dst_local]
-        edge_input = torch.cat([e_ij, data.edge_attr],dim=-1)
+        edge_input = torch.cat([e_ij, data.edge_attr],dim=-1) # concat updated edges with original edges, seems to make more stable
 
         out = self.edge_decoder(edge_input)
         return out.squeeze(-1)  # (num_edges,) to match target shape
