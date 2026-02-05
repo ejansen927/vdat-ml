@@ -1,0 +1,21 @@
+# mixed_500k_4q Dataset Configuration (Tensor/MLP)
+# Auto-generated on 2026-02-05 17:22:26
+
+_target_: data.QuantumDataset
+name: "mixed_500k_4q"
+
+root: "data/mixed_500k_4q"
+train_file: "train.pt"
+val_file: "val.pt"
+test_file: "test.pt"
+
+is_graph: false
+
+input_dim: 10
+output_dim: 6
+n_qubits: 4
+n_edges: 6
+
+batch_size: ${training.batch_size}
+num_workers: 4
+pin_memory: true

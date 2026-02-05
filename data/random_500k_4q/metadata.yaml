@@ -1,0 +1,9 @@
+generated_at: '2026-02-05T17:22:26.621596'
+composition: 500000 random
+n_samples: 500000
+n_qubits: 4
+n_edges: 6
+splits:
+  train: 0.8
+  val: 0.1
+  test: 0.1
