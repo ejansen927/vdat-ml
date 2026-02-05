@@ -1,0 +1,24 @@
+generated_at: '2026-02-01T23:37:15.513712'
+config_file: configs/data/normal_100k.yaml
+distribution: normal
+n_samples: 100000
+n_qubits: 4
+n_edges: 6
+seed: 42
+splits:
+  train: 0.8
+  val: 0.1
+  test: 0.1
+shapes:
+  X:
+  - 100000
+  - 10
+  y:
+  - 100000
+  - 6
+  A:
+  - 100000
+  - 11
+  Xi:
+  - 100000
+  - 4

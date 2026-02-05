@@ -157,7 +157,7 @@ def split_data(data: Dict[str, np.ndarray], train_ratio: float = 0.8, val_ratio:
 
 
 def save_split(data: Dict[str, np.ndarray], path: Path):
-    torch.save({k: torch.tensor(v, dtype=torch.float32) for k, v in data.items()}, path)
+    torch.save({k: torch.tensor(v, dtype=torch.float64) for k, v in data.items()}, path)
     print(f"    {path.name}: {len(data['X'])} samples")
 
 

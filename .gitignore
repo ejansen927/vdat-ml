@@ -23,9 +23,20 @@ __pycache__/
 .venv/
 venv/
 env/
+active_learning/
 scripts/tmp
+scripts/build_balanced.py
+scripts/build_balanced_with_al.py
+scripts/degeneracy_diagnostic.py
+scripts/diagnose.py
+scripts/diagnose_predictions.py
+scripts/evaluate_cases.py
+scripts/examine_dataset.py
 src/tmp
 src/backup
+active-learning/
+scripts/generate_stratified.py
+scripts/generate_stratified
 
 # W&B
 wandb/

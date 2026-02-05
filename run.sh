@@ -1,9 +1,9 @@
 #!/bin/bash
 #
 
-python src/train.py -m \
+python src/train.py \
     model=gnn \
-    data=normal_1M_graph \
+    data=Niraj1M_graph \
     model.num_layers=4 \
     model.hidden_dim=256 \
     optimizer=adamw \
@@ -12,5 +12,5 @@ python src/train.py -m \
     training.epochs=100 \
     training.batch_size=256 \
     model.pooling=sum \
-    project.name=VDAT-ML \
-    project.experiment=gnn_test1
+    project.name=gnn-testing \
+    project.experiment=gnn_al1
