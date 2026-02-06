@@ -15,6 +15,9 @@ from string import Template
 
 import numpy as np
 import torch
+import yaml
+import time
+from scipy.stats import qmc
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -68,22 +71,77 @@ def sample_sobol(n_qubits: int, n_edges: int, sobol_sample: np.ndarray) -> Tuple
     theta = sobol_sample[idx] * (np.pi / 2)
     return h_i, J_ij, theta
 
-def sample_normal(n_qubits: int, n_edges: int, rng: np.random.Generator) -> Tuple[np.ndarray, np.ndarray, float]:
+
+def sample_ising(n_qubits: int, n_edges: int, rng: np.random.Generator) -> Tuple[np.ndarray, np.ndarray, float]:
     h_i = np.zeros(n_qubits)
     J_ij = rng.uniform(-0.5,0.5,size=n_edges)
     J_ij = J_ij / np.linalg.norm(J_ij)
     theta = np.pi / 2
     return h_i, J_ij, theta
 
+def sample_normal(n_qubits: int, n_edges: int, rng: np.random.Generator) -> Tuple[np.ndarray, np.ndarray, float]:
+    h_i = rng.uniform(0,1,size=n_qubits)
+    J_ij = rng.uniform(-0.5,0.5,size=n_edges)
+    J_ij = J_ij / np.linalg.norm(J_ij)
+    theta = None # sweep 10 thetas per config
+    return h_i, J_ij, theta
+
 def sample_coulomb(n_qubits: int, n_edges: int, rng: np.random.Generator) -> Tuple[np.ndarray, np.ndarray, float]:
-    # positive version of sample_normal
+    # positive version of sample_ising
     h_i = np.zeros(n_qubits)
     J_ij = rng.uniform(0,0.5,size=n_edges)
     J_ij = J_ij / np.linalg.norm(J_ij)
     theta = np.pi / 2
     return h_i, J_ij, theta
 
-DISTRIBUTIONS = {"random": sample_random, "sobol": sample_sobol, "normal": sample_normal, "coulomb": sample_coulomb}
+def sample_uniform_j(n_qubits: int, n_edges: int, rng: np.random.Generator):
+    J_ij = np.full(n_edges, 1.0 / np.sqrt(n_edges))  # all equal, ||J||=1
+    h_total = rng.uniform(0.0, 1.0)
+    h_i = np.full(n_qubits, h_total / n_qubits)  # uniform h, sum = h_total
+    return h_i, J_ij, np.linspace(0, np.pi / 2, 10)
+
+def _hypersphere(n, rng):
+    J = rng.standard_normal(n)
+    return J / np.linalg.norm(J)
+
+def sample_dimer(n_qubits: int, n_edges: int, rng: np.random.Generator):
+    h_i = rng.uniform(0, 1, size=n_qubits)
+    J_ij = np.zeros(n_edges)
+    J_ij[rng.integers(0, n_edges)] = rng.choice([-1.0, 1.0])
+    return h_i, J_ij, np.linspace(0, np.pi / 2, 10)
+
+def sample_near_ising(n_qubits: int, n_edges: int, rng: np.random.Generator):
+    h_i = rng.uniform(0, 1, size=n_qubits)
+    J_ij = _hypersphere(n_edges, rng)
+    return h_i, J_ij, np.linspace(np.pi/2 - 0.3, np.pi/2, 10)
+
+def sample_field(n_qubits: int, n_edges: int, rng: np.random.Generator):
+    h_i = rng.uniform(0, 1, size=n_qubits)
+    J_ij = _hypersphere(n_edges, rng)
+    return h_i, J_ij, np.linspace(0, 0.3, 10)
+
+MIXED_CASES = [
+    (sample_normal,     0.333),  # 30%
+    (sample_ising,      0.222),  # 20%
+    (sample_dimer,      0.111),  # 10%
+    (sample_near_ising, 0.167),  # 15%
+    (sample_field,      0.167),  # 15%
+]
+_MIXED_SAMPLERS = [c[0] for c in MIXED_CASES]
+_MIXED_WEIGHTS = np.array([c[1] for c in MIXED_CASES])
+_MIXED_WEIGHTS /= _MIXED_WEIGHTS.sum()
+
+def sample_mixed(n_qubits: int, n_edges: int, rng: np.random.Generator):
+    idx = rng.choice(len(_MIXED_SAMPLERS), p=_MIXED_WEIGHTS)
+    return _MIXED_SAMPLERS[idx](n_qubits, n_edges, rng)
+
+DISTRIBUTIONS = {
+    "random": sample_random, "sobol": sample_sobol, "normal": sample_normal,
+    "coulomb": sample_coulomb, "ising": sample_ising,
+    "dimer": sample_dimer, "near_ising": sample_near_ising, "field": sample_field,
+    "mixed": sample_mixed,
+    "uniform_j": sample_uniform_j,
+}
 
 def generate_data(
     n_samples: int,
@@ -92,9 +150,8 @@ def generate_data(
     julia_main,
     seed: int = 42,
     verbose: bool = True,
+    batch_size: int = 10000,          # flush every N configs to avoid Julia GC segfault
 ) -> Dict[str, np.ndarray]:
-    import time
-    from scipy.stats import qmc
     
     rng = np.random.default_rng(seed)
     edges_julia = list(itertools.combinations(range(1, n_qubits + 1), 2))
@@ -110,34 +167,65 @@ def generate_data(
         sobol_samples = sampler.random(n_samples)
     
     print_freq = max(1, n_samples // 10)
-    A_list, Xi_list, ZZij_list = [], [], []
+    
+    # Batched storage — flush periodically to reduce memory pressure
+    A_batch, Xi_batch, ZZij_batch = [], [], []
+    A_all, Xi_all, ZZij_all = [], [], []
+    oracle_count = 0
     start_time = time.time()
     
     for i in range(n_samples):
         if verbose and (i + 1) % print_freq == 0:
             elapsed = time.time() - start_time
-            rate = (i + 1) / elapsed
+            rate = oracle_count / elapsed if elapsed > 0 else 0
             pct = 100 * (i + 1) / n_samples
-            print(f"    {i + 1:>8,} / {n_samples:,} ({pct:5.1f}%) | Rate: {rate:.1f}/s")
+            print(f"    {i + 1:>8,} / {n_samples:,} ({pct:5.1f}%) | Oracle calls: {oracle_count:,} | Rate: {rate:.1f}/s")
        
         if distribution == "sobol":
             h_i, J_ij, theta = sample_sobol(n_qubits, n_edges, sobol_samples[i])
         else:
             h_i, J_ij, theta = DISTRIBUTIONS[distribution](n_qubits, n_edges, rng)
         
-        A_list.append(np.concatenate([h_i, J_ij, [theta]]))
         Jij_dict = {edge: J_ij[k] for k, edge in enumerate(edges_julia)}
-        Xi, ZZij = call_oracle(julia_main, Jij_dict, h_i, theta, n_qubits, edges_julia)
-        Xi_list.append(Xi)
-        ZZij_list.append(ZZij)
+
+        if theta is None:
+            thetas = np.linspace(0, np.pi/2, 10)
+        elif isinstance(theta, np.ndarray):
+            thetas = theta
+        else:
+            thetas = [theta]
+
+        for t in thetas:
+            A_batch.append(np.concatenate([h_i, J_ij, [t]]))
+            Xi, ZZij = call_oracle(julia_main, Jij_dict, h_i, t, n_qubits, edges_julia)
+            Xi_batch.append(Xi)
+            ZZij_batch.append(ZZij)
+            oracle_count += 1
+
+        # Flush batch: vstack into numpy arrays, clear lists, nudge Julia GC
+        if (i + 1) % batch_size == 0:
+            A_all.append(np.vstack(A_batch))
+            Xi_all.append(np.vstack(Xi_batch))
+            ZZij_all.append(np.vstack(ZZij_batch))
+            A_batch, Xi_batch, ZZij_batch = [], [], []
+            try:
+                julia_main.eval("GC.gc()")
+            except Exception:
+                pass
+    
+    # Flush remaining
+    if A_batch:
+        A_all.append(np.vstack(A_batch))
+        Xi_all.append(np.vstack(Xi_batch))
+        ZZij_all.append(np.vstack(ZZij_batch))
     
     if verbose:
         total = time.time() - start_time
-        print(f"\n  Done: {n_samples:,} samples in {total:.1f}s ({n_samples/total:.1f}/s)")
+        print(f"\n  Done: {oracle_count:,} oracle calls from {n_samples:,} configs in {total:.1f}s ({oracle_count/total:.1f}/s)")
     
-    A = np.vstack(A_list)
-    Xi = np.vstack(Xi_list)
-    ZZij = np.vstack(ZZij_list)
+    A = np.vstack(A_all)
+    Xi = np.vstack(Xi_all)
+    ZZij = np.vstack(ZZij_all)
     Jij = A[:, n_qubits:n_qubits + n_edges]
     X = np.hstack([Xi, Jij])
     
@@ -162,7 +250,6 @@ def save_split(data: Dict[str, np.ndarray], path: Path):
 
 
 def save_metadata(output_dir: Path, args, shapes: Dict[str, tuple], config_name: str):
-    import yaml
     n_edges = len(list(itertools.combinations(range(args.n_qubits), 2)))
     
     metadata = {
