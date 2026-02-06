@@ -5,7 +5,7 @@ Inference script for VDAT-ML.
 Loads a trained model checkpoint, reads a .dat file from VDAT,
 and plots O_truth vs O_pred for multiple r values.
 
-Supports both legacy and current GNN architectures via auto-detection.
+Supports legacy, current GNN, and DualHeadGNN architectures via auto-detection.
 
 Usage:
     python scripts/inference.py checkpoints/best.pt data/
@@ -240,7 +240,7 @@ class CurrentInteractiveNet(nn.Module):
 
         # Edge update
         self.edge_update_mlp = nn.Sequential(
-            nn.Linear(hidden_dim * 4, hidden_dim),
+            nn.Linear(hidden_dim*4, hidden_dim),
             act_fn,
             nn.Linear(hidden_dim, hidden_dim),
         )
@@ -313,6 +313,7 @@ class CurrentGNN(nn.Module):
         num_layers: int = 3,
         activation: str = "silu",
         pooling: str = "mean",
+        n_qubits_pe: int = 0,                                     # one-hot: 0=off, >0=append one-hot
         **kwargs,
     ):
         super().__init__()
@@ -320,11 +321,13 @@ class CurrentGNN(nn.Module):
         self.node_dim = node_dim
         self.edge_dim = edge_dim
         self.hidden_dim = hidden_dim
+        self.n_qubits_pe = n_qubits_pe                            # one-hot
         
         act_fn = get_activation(activation)
         
-        # Node encoder
-        self.node_encoder = nn.Linear(node_dim, hidden_dim)
+        # one-hot: widen node encoder when PE enabled              # one-hot
+        encoder_input_dim = node_dim + (n_qubits_pe if n_qubits_pe > 0 else 0)  # one-hot
+        self.node_encoder = nn.Linear(encoder_input_dim, hidden_dim)  # one-hot
         
         # Edge encoder
         self.edge_encoder = nn.Sequential(
@@ -348,10 +351,22 @@ class CurrentGNN(nn.Module):
             nn.Linear(hidden_dim // 2, 1),
         )
     
+    def _inject_node_pe(self, x_dense):                            # one-hot
+        """Append one-hot positional encoding to node features."""  # one-hot
+        B, N, _ = x_dense.shape                                    # one-hot
+        one_hot = torch.eye(                                       # one-hot
+            N, dtype=x_dense.dtype, device=x_dense.device          # one-hot
+        ).unsqueeze(0).expand(B, -1, -1)                           # one-hot
+        return torch.cat([x_dense, one_hot], dim=-1)               # one-hot
+
     def forward(self, data) -> torch.Tensor:
         """Forward pass."""
         # Convert to dense batch format
         x_dense, mask = to_dense_batch(data.x, data.batch)
+        
+        # one-hot: inject positional encoding before node encoder  # one-hot
+        if self.n_qubits_pe > 0:                                   # one-hot
+            x_dense = self._inject_node_pe(x_dense)                # one-hot
         
         # Encode nodes
         h = self.node_encoder(x_dense)
@@ -378,7 +393,117 @@ class CurrentGNN(nn.Module):
         edge_input = torch.cat([e_ij, data.edge_attr], dim=-1)
 
         out = self.edge_decoder(edge_input)
+
+        # tanh for bounded output
+        out = torch.tanh(out)
+
         return out.squeeze(-1)
+
+
+# =============================================================================
+# Dual-Head GNN (for dual-head checkpoints)                       # dual-head
+# =============================================================================
+
+class CurrentDualHeadGNN(CurrentGNN):                              # dual-head
+    """                                                            # dual-head
+    Dual-head GNN: shared backbone with separate magnitude and     # dual-head
+    sign prediction heads.                                         # dual-head
+                                                                   # dual-head
+    Subclasses CurrentGNN to reuse the backbone. The inherited     # dual-head
+    edge_decoder is unused but kept for state_dict compatibility.  # dual-head
+                                                                   # dual-head
+    Returns dict: {magnitude, sign_logit, zz}                      # dual-head
+    """                                                            # dual-head
+                                                                   # dual-head
+    def __init__(                                                  # dual-head
+        self,                                                      # dual-head
+        node_dim: int = 1,                                         # dual-head
+        edge_dim: int = 1,                                         # dual-head
+        hidden_dim: int = 128,                                     # dual-head
+        num_layers: int = 3,                                       # dual-head
+        activation: str = "silu",                                  # dual-head
+        pooling: str = "mean",                                     # dual-head
+        n_qubits_pe: int = 0,                                     # one-hot: pass through
+        **kwargs,                                                  # dual-head
+    ):                                                             # dual-head
+        super().__init__(                                          # dual-head
+            node_dim=node_dim,                                     # dual-head
+            edge_dim=edge_dim,                                     # dual-head
+            hidden_dim=hidden_dim,                                 # dual-head
+            num_layers=num_layers,                                 # dual-head
+            activation=activation,                                 # dual-head
+            pooling=pooling,                                       # dual-head
+            n_qubits_pe=n_qubits_pe,                               # one-hot: pass through
+            **kwargs,                                              # dual-head
+        )                                                          # dual-head
+                                                                   # dual-head
+        act_fn = get_activation(activation)                        # dual-head
+                                                                   # dual-head
+        # Magnitude head: predicts |ZZ| in [0, 1]                 # dual-head
+        self.magnitude_head = nn.Sequential(                       # dual-head
+            nn.Linear(hidden_dim + edge_dim, hidden_dim),          # dual-head
+            act_fn,                                                # dual-head
+            nn.Linear(hidden_dim, hidden_dim // 2),                # dual-head
+            act_fn,                                                # dual-head
+            nn.Linear(hidden_dim // 2, 1),                         # dual-head
+            nn.Sigmoid(),                                          # dual-head
+        )                                                          # dual-head
+                                                                   # dual-head
+        # Sign head: predicts raw logit for P(ZZ > 0)             # dual-head
+        self.sign_head = nn.Sequential(                            # dual-head
+            nn.Linear(hidden_dim + edge_dim, hidden_dim),          # dual-head
+            act_fn,                                                # dual-head
+            nn.Linear(hidden_dim, hidden_dim // 2),                # dual-head
+            act_fn,                                                # dual-head
+            nn.Linear(hidden_dim // 2, 1),                         # dual-head
+        )                                                          # dual-head
+                                                                   # dual-head
+        # Learnable loss weights (not used at inference,           # dual-head
+        # but needed to load checkpoint state_dict)                # dual-head
+        self.log_sigma_mag = nn.Parameter(torch.zeros(1))          # dual-head
+        self.log_sigma_sign = nn.Parameter(torch.zeros(1))         # dual-head
+                                                                   # dual-head
+    def forward(self, data) -> dict:                               # dual-head
+        """Forward pass with dual-head output."""                  # dual-head
+        # --- Backbone (same as CurrentGNN.forward) ---            # dual-head
+        x_dense, mask = to_dense_batch(data.x, data.batch)        # dual-head
+                                                                   # dual-head
+        # one-hot: inject positional encoding before node encoder  # one-hot
+        if self.n_qubits_pe > 0:                                   # one-hot
+            x_dense = self._inject_node_pe(x_dense)                # one-hot
+                                                                   # dual-head
+        h = self.node_encoder(x_dense)                             # dual-head
+                                                                   # dual-head
+        adj_J = to_dense_adj(                                      # dual-head
+            data.edge_index, data.batch, data.edge_attr            # dual-head
+        ).squeeze(-1)                                              # dual-head
+        adj_J = adj_J + adj_J.transpose(1, 2)                     # dual-head
+        e = self.edge_encoder(adj_J.unsqueeze(-1))                 # dual-head
+                                                                   # dual-head
+        for layer in self.layers:                                  # dual-head
+            h, e = layer(h, e)                                     # dual-head
+                                                                   # dual-head
+        # --- Edge features ---                                    # dual-head
+        batch_idx = data.batch[data.edge_index[0]]                 # dual-head
+        N = x_dense.size(1)                                        # dual-head
+        src_local = data.edge_index[0] % N                         # dual-head
+        dst_local = data.edge_index[1] % N                         # dual-head
+        e_ij = e[batch_idx, src_local, dst_local]                  # dual-head
+        edge_input = torch.cat([e_ij, data.edge_attr], dim=-1)    # dual-head
+                                                                   # dual-head
+        # --- Dual heads ---                                       # dual-head
+        magnitude = self.magnitude_head(edge_input).squeeze(-1)    # dual-head
+        sign_logit = self.sign_head(edge_input).squeeze(-1)        # dual-head
+                                                                   # dual-head
+        # Reconstruct ZZ                                           # dual-head
+        sign_prob = torch.sigmoid(sign_logit)                      # dual-head
+        zz = (2.0 * sign_prob - 1.0) * magnitude                  # dual-head
+                                                                   # dual-head
+        return {                                                   # dual-head
+            "magnitude": magnitude,                                # dual-head
+            "sign_logit": sign_logit,                              # dual-head
+            "zz": zz,                                              # dual-head
+        }                                                          # dual-head
 
 
 # =============================================================================
@@ -458,7 +583,16 @@ def compute_Jij(r: float, n_qubits: int = 4):
     J14, J23 = (1 - 2*r), (1 - 2*r)
     J13, J24 = (1 - 3*r), (1 - 3*r)
     
-    return np.array([J12, J13, J14, J23, J24, J34])
+    Jij = np.array([J12, J13, J14, J23, J24, J34])
+    
+    # Normalize to unit hypersphere to match training distribution
+    norm = np.linalg.norm(Jij)
+    if norm > 0:
+        Jij_normalized = Jij / norm
+    else:
+        Jij_normalized = Jij
+    
+    return Jij_normalized, Jij  # (model input, for O_pred computation)
 
 
 def create_graph_dataset(Xi, Jij, edge_index, dtype=torch.float64):
@@ -491,7 +625,14 @@ def detect_gnn_version(state_dict: dict) -> str:
     Returns:
         'legacy' - Old architecture (Jan 2026 and earlier)
         'current' - New architecture (Feb 2026 onwards)
+        'dual_head' - Dual-head architecture                       # dual-head
     """
+    # dual-head: check for magnitude/sign heads first              # dual-head
+    has_magnitude_head = any("magnitude_head" in k for k in state_dict.keys())  # dual-head
+    has_sign_head = any("sign_head" in k for k in state_dict.keys())            # dual-head
+    if has_magnitude_head and has_sign_head:                        # dual-head
+        return "dual_head"                                         # dual-head
+    
     # Current version has edge_encoder
     has_edge_encoder = any("edge_encoder" in k for k in state_dict.keys())
     
@@ -548,6 +689,7 @@ def load_model(checkpoint_path: str, device: str = "cpu"):
     Supports:
         - Legacy GNN (Jan 2026 and earlier)
         - Current GNN (Feb 2026 onwards)
+        - DualHeadGNN (Feb 2026 onwards)                           # dual-head
         - MLP
     """
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
@@ -572,9 +714,24 @@ def load_model(checkpoint_path: str, device: str = "cpu"):
         print(f"  Parameters: hidden_dim={params['hidden_dim']}, num_layers={params['num_layers']}")
         
         # Get additional params from config if available
-        model_cfg = cfg.get("model", {})
+        if isinstance(cfg, dict):                                  # dual-head: handle dict configs
+            model_cfg = cfg.get("model", {})                       # dual-head
+        else:                                                      # dual-head
+            model_cfg = {}                                         # dual-head
         activation = model_cfg.get("activation", "silu")
         pooling = model_cfg.get("pooling", "mean")
+        n_qubits_pe = model_cfg.get("n_qubits_pe", 0)             # one-hot: from config
+        
+        # one-hot: fallback auto-detect from weight shape          # one-hot
+        # If config says 0 but node_encoder expects >1 input,     # one-hot
+        # the extra dims are PE                                    # one-hot
+        if n_qubits_pe == 0 and params["node_dim"] > 1:           # one-hot
+            n_qubits_pe = params["node_dim"] - 1                   # one-hot
+            print(f"  Auto-detected n_qubits_pe={n_qubits_pe} from weight shape")  # one-hot
+        
+        # one-hot: if PE enabled, inferred node_dim includes PE dims # one-hot
+        # Split: physical node_dim = inferred - n_qubits_pe        # one-hot
+        physical_node_dim = params["node_dim"] - n_qubits_pe if n_qubits_pe > 0 else params["node_dim"]  # one-hot
         
         if version == "legacy":
             model = LegacyGNN(
@@ -584,28 +741,45 @@ def load_model(checkpoint_path: str, device: str = "cpu"):
                 num_layers=params["num_layers"],
                 activation=activation,
             )
+        elif version == "dual_head":                               # dual-head
+            model = CurrentDualHeadGNN(                            # dual-head
+                node_dim=physical_node_dim,                        # one-hot: use physical dim
+                edge_dim=params["edge_dim"],                       # dual-head
+                hidden_dim=params["hidden_dim"],                   # dual-head
+                num_layers=params["num_layers"],                   # dual-head
+                activation=activation,                             # dual-head
+                pooling=pooling,                                   # dual-head
+                n_qubits_pe=n_qubits_pe,                           # one-hot
+            )                                                      # dual-head
         else:  # current
             model = CurrentGNN(
-                node_dim=params["node_dim"],
+                node_dim=physical_node_dim,                        # one-hot: use physical dim
                 edge_dim=params["edge_dim"],
                 hidden_dim=params["hidden_dim"],
                 num_layers=params["num_layers"],
                 activation=activation,
                 pooling=pooling,
+                n_qubits_pe=n_qubits_pe,                          # one-hot
             )
         
         # Ensure config reflects what we loaded
+        if not isinstance(cfg, dict):                              # dual-head
+            cfg = {}                                               # dual-head
         if "model" not in cfg:
             cfg["model"] = {}
-        cfg["model"]["name"] = "gnn"
+        cfg["model"]["name"] = "dual_head_gnn" if version == "dual_head" else "gnn"  # dual-head
         cfg["model"]["version"] = version
         cfg["model"]["hidden_dim"] = params["hidden_dim"]
         cfg["model"]["num_layers"] = params["num_layers"]
         
     else:
         # MLP
-        model_cfg = cfg.get("model", {})
-        data_cfg = cfg.get("data", {})
+        if isinstance(cfg, dict):                                  # dual-head: handle dict configs
+            model_cfg = cfg.get("model", {})                       # dual-head
+            data_cfg = cfg.get("data", {})                         # dual-head
+        else:                                                      # dual-head
+            model_cfg = {}                                         # dual-head
+            data_cfg = {}                                          # dual-head
         
         if "hidden_dims" in model_cfg:
             hidden_dims = list(model_cfg["hidden_dims"])
@@ -632,6 +806,8 @@ def load_model(checkpoint_path: str, device: str = "cpu"):
             dropout=model_cfg.get("dropout", 0.0),
         )
         
+        if not isinstance(cfg, dict):                              # dual-head
+            cfg = {}                                               # dual-head
         if "model" not in cfg:
             cfg["model"] = {}
         cfg["model"]["name"] = "mlp"
@@ -658,16 +834,30 @@ def load_model(checkpoint_path: str, device: str = "cpu"):
 # Inference
 # =============================================================================
 
-def run_inference(model, xi_i, Jij_i, n_qubits: int = 4, device: str = "cpu", is_gnn: bool = True):
-    """Run model inference."""
+def run_inference(model, xi_i, Jij_i, n_qubits: int = 4, device: str = "cpu",
+                  is_gnn: bool = True, is_dual_head: bool = False,
+                  Jij_original: np.ndarray = None):                 # dual-head: added; also for J normalization
+    """Run model inference.
+    
+    Args:
+        Jij_i: Normalized J values for model input
+        Jij_original: Original (unnormalized) J values for O_pred computation.
+                      If None, uses Jij_i for both.
+    """
     N = xi_i.shape[0]
     n_edges = math.comb(n_qubits, 2)
     
     # Convert xi_i to X_i
     X_i = 2 * xi_i
     
-    # Tile Jij for all samples
+    # Tile Jij for all samples (normalized for model input)
     Jij = np.tile(Jij_i, (N, 1))
+    
+    # Original J for O_pred (unnormalized)
+    if Jij_original is not None:
+        Jij_for_O = np.tile(Jij_original, (N, 1))
+    else:
+        Jij_for_O = Jij
     
     # Detect model dtype
     model_dtype = next(model.parameters()).dtype
@@ -681,10 +871,18 @@ def run_inference(model, xi_i, Jij_i, n_qubits: int = 4, device: str = "cpu", is
         loader = DataLoader(data_list, batch_size=256, shuffle=False)
         
         preds = []
+        # dual-head: also collect sign accuracy stats               # dual-head
+        sign_correct = 0                                            # dual-head
+        sign_total = 0                                              # dual-head
         with torch.no_grad():
             for batch in loader:
                 batch = batch.to(device)
-                pred = model(batch)
+                output = model(batch)                               # dual-head: renamed pred -> output
+                # dual-head: handle dict output                     # dual-head
+                if isinstance(output, dict):                        # dual-head
+                    pred = output["zz"]                             # dual-head
+                else:                                               # dual-head
+                    pred = output                                   # dual-head
                 preds.append(pred.cpu())
         
         preds = torch.cat(preds, dim=0)
@@ -700,8 +898,8 @@ def run_inference(model, xi_i, Jij_i, n_qubits: int = 4, device: str = "cpu", is
         
         ZiZj_pred = preds.cpu().numpy()
     
-    # Compute O_pred = 0.25 * sum(Jij * ZiZj)
-    O_pred = 0.25 * np.sum(Jij * ZiZj_pred, axis=1)
+    # Compute O_pred = 0.25 * sum(Jij * ZiZj) using original (unnormalized) J
+    O_pred = 0.25 * np.sum(Jij_for_O * ZiZj_pred, axis=1)
     
     return ZiZj_pred, O_pred
 
@@ -885,8 +1083,9 @@ def main():
     }
     
     model_name = cfg.get("model", {}).get("name", "gnn")
-    is_gnn = model_name == "gnn"
-    print(f"Model type: {'GNN' if is_gnn else 'MLP'}")
+    is_gnn = model_name in ("gnn", "dual_head_gnn")               # dual-head: both are GNN-based
+    is_dual_head = model_name == "dual_head_gnn"                   # dual-head
+    print(f"Model type: {'DualHeadGNN' if is_dual_head else 'GNN' if is_gnn else 'MLP'}")  # dual-head
     if is_gnn:
         print(f"GNN version: {cfg['model'].get('version', 'unknown')}")
     print()
@@ -904,8 +1103,12 @@ def main():
         print(f"  Samples: {len(theta)}")
         print(f"  O_truth range: [{O_truth.min():.4f}, {O_truth.max():.4f}]")
         
-        Jij_single = compute_Jij(r, args.n_qubits)
-        ZiZj_pred, O_pred = run_inference(model, xi_i, Jij_single, args.n_qubits, args.device, is_gnn)
+        Jij_normalized, Jij_original = compute_Jij(r, args.n_qubits)
+        print(f"  J norm: |J|={np.linalg.norm(Jij_original):.4f} -> normalized to 1.0")
+        ZiZj_pred, O_pred = run_inference(model, xi_i, Jij_normalized, args.n_qubits,
+                                          args.device, is_gnn,
+                                          is_dual_head=is_dual_head,
+                                          Jij_original=Jij_original)
         print(f"  O_pred range: [{O_pred.min():.4f}, {O_pred.max():.4f}]")
         
         diff = O_pred - O_truth
