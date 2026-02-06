@@ -1,0 +1,21 @@
+# normal_100k_graph Dataset Configuration (Graph/GNN)
+# Auto-generated on 2026-02-01 23:37:15
+
+_target_: data.QuantumGraphDataset
+name: "combined_6.1M_graph"
+
+root: "data/combined_6.1M"
+train_file: "train.pt"
+val_file: "val.pt"
+test_file: "test.pt"
+
+is_graph: true
+
+n_qubits: 4
+input_dim: 10
+output_dim: 6
+n_edges: 6
+
+batch_size: ${training.batch_size}
+num_workers: 4
+pin_memory: true
