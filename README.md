@@ -10,15 +10,15 @@ VDAT-ML trains neural networks to replace exact diagonalization in a [VDAT](#con
 
 Each sample is a fully connected *N*-qubit transverse-field Ising Hamiltonian:
 
-$$
-H(\theta) = \sin\theta \sum_{i<j} J_{ij}\, Z_i Z_j \;-\; \cos\theta \sum_i h_i\, X_i
-$$
+```math
+H(\theta) = \sin\theta \sum_{i<j} J_{ij}  Z_i Z_j  -  \cos\theta \sum_i h_i  X_i
+```
 
 Ground states are computed by exact diagonalization (Julia, `src/gene_transverse_field_Ising.jl`). The learning task is the map
 
-$$
-\big(\langle X_i \rangle,\; J_{ij}\big) \;\longmapsto\; \langle Z_i Z_j \rangle
-$$
+```math
+\big(\langle X_i \rangle,  J_{ij}\big)  \longmapsto  \langle Z_i Z_j \rangle
+```
 
 | | Quantity | Where it lives in the graph | Shape (N = 4) |
 |---|---|---|---|
@@ -49,36 +49,36 @@ Each layer is a message-passing block in the style of Interaction Networks (Batt
 
 **1. Edge update.** Edges receive symmetric combinations of their endpoint embeddings:
 
-$$
-\Delta e_{ij} = \mathrm{MLP}_e\big([\,h_i + h_j,\; |h_i - h_j|,\; h_i \odot h_j,\; e_{ij}\,]\big)
-$$
+```math
+\Delta e_{ij} = \mathrm{MLP}_e\big([ h_i + h_j,  |h_i - h_j|,  h_i \odot h_j,  e_{ij} ]\big)
+```
 
-$$
+```math
 e_{ij} \leftarrow g \odot e_{ij} + (1-g) \odot \Delta e_{ij}, \qquad g = \sigma\big(W_e[e_{ij}, \Delta e_{ij}]\big)
-$$
+```
 
 **2. Messages.** Each node receives a message from every other node, conditioned on the updated edge:
 
-$$
-m_{ij} = \mathrm{MLP}_m\big([\,h_j,\; h_i,\; e_{ij}\,]\big), \qquad a_i = \frac{1}{N-1}\sum_{j \ne i} m_{ij}
-$$
+```math
+m_{ij} = \mathrm{MLP}_m\big([ h_j,  h_i,  e_{ij} ]\big), \qquad a_i = \frac{1}{N-1}\sum_{j \ne i} m_{ij}
+```
 
 (Self-messages are masked out. Aggregation can be `mean`, `sum`, or `max`.)
 
 **3. Gated node update:**
 
-$$
+```math
 \Delta h_i = \mathrm{MLP}_u\big([h_i, a_i]\big), \qquad
 h_i \leftarrow g \odot h_i + (1-g) \odot \Delta h_i, \qquad g = \sigma\big(W_h[h_i, \Delta h_i]\big)
-$$
+```
 
 ### Edge decoder
 
 The prediction for each pair is read off the **final edge embedding**, concatenated with the raw coupling as a skip connection, and bounded to the physical range:
 
-$$
-\langle Z_i Z_j \rangle_{\text{pred}} = \tanh\Big(\mathrm{MLP}_d\big([\,e^{(L)}_{ij},\; J_{ij}\,]\big)\Big)
-$$
+```math
+\langle Z_i Z_j \rangle_{\text{pred}} = \tanh\Big(\mathrm{MLP}_d\big([ e^{(L)}_{ij},  J_{ij} ]\big)\Big)
+```
 
 ### Design choices
 
@@ -98,9 +98,9 @@ Sign errors account for most of the MSE in near-Ising regimes, so the dual-head 
 
 The prediction is reconstructed as ZZ = (2σ(s) − 1)·|ZZ|. The loss combines MSE on magnitude with BCE on sign. The sign term is weighted per edge by the target magnitude |ZZ|, so near-zero (sign-ambiguous) correlators don't dominate. The two tasks are balanced with learned uncertainty weights (Kendall et al., 2018):
 
-$$
-\mathcal{L} = e^{-2\log\sigma_m}\,\mathcal{L}_{\text{mag}} + \log\sigma_m \;+\; e^{-2\log\sigma_s}\,\mathcal{L}_{\text{sign}} + \log\sigma_s
-$$
+```math
+\mathcal{L} = e^{-2\log\sigma_m} \mathcal{L}_{\text{mag}} + \log\sigma_m  +  e^{-2\log\sigma_s} \mathcal{L}_{\text{sign}} + \log\sigma_s
+```
 
 ### Baseline
 
