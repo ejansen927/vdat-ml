@@ -11,7 +11,7 @@ VDAT-ML trains neural networks to replace exact diagonalization in a [VDAT](#con
 Each sample is a fully connected *N*-qubit transverse-field Ising Hamiltonian:
 
 ```math
-H(\theta) = \sin\theta \sum_{i<j} J_{ij}  Z_i Z_j  -  \cos\theta \sum_i h_i  X_i
+H(\theta) = \sin\theta \sum_{ij} J_{ij}  Z_i Z_j  -  \cos\theta \sum_i h_i  X_i
 ```
 
 Ground states are computed by exact diagonalization (Julia, `src/gene_transverse_field_Ising.jl`). The learning task is the map
