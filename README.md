@@ -14,7 +14,7 @@ Each sample is a fully connected *N*-qubit transverse-field Ising Hamiltonian:
 H(\theta) = \sin\theta \sum_{i \lt j} J_{ij}  Z_i Z_j  -  \cos\theta \sum_i h_i  X_i
 ```
 
-Ground states are computed by exact diagonalization (Julia, `src/gene_transverse_field_Ising.jl`). The learning task is the map
+Ground states are computed by exact diagonalization (Julia, `src/gene_transverse_field_Ising.jl`). The learning task is this map:
 
 ```math
 \big(\langle X_i \rangle,  J_{ij}\big)  \longmapsto  \langle Z_i Z_j \rangle
